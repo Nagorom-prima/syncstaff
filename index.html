@@ -3,35 +3,47 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SyncStaff</title>
+<title>Cleaning Operations Mgt</title>
 <style>
-:root{--bg:#0a0a0b;--card:#131315;--line:#26262b;--text:#f3f3f4;--mute:#9b9ba3;--ok:#10b981;--warn:#f59e0b;--bad:#ef4444;--blue:#60a5fa;color-scheme:dark}
+:root{--bg:#0a0a0b;--card:#121214;--line:#26262b;--text:#f3f3f4;--mute:#9b9ba3;color-scheme:dark}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
 body{margin:0;background:var(--bg);color:var(--text);font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:env(safe-area-inset-top) 16px env(safe-area-inset-bottom)}
-main,.wrap{max-width:640px;margin:0 auto}
-h1{font-size:1.9rem;line-height:1.1;margin:20px 0 4px;font-weight:700}
+main{max-width:640px;margin:0 auto}
+h1{font-size:2rem;line-height:1.1;margin:20px 0 4px;font-weight:800}
+h2{font-size:1.1rem;margin:26px 0 10px}
 .mute{color:var(--mute)}
 input,select,button{font:inherit;color:var(--text);background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;width:100%}
-button{cursor:pointer;background:var(--text);color:#0a0a0b;font-weight:600;border:0}
+button{cursor:pointer;background:var(--text);color:#0a0a0b;font-weight:700;border:0}
+button:disabled{opacity:.5}
 button.ghost{background:var(--card);color:var(--text);border:1px solid var(--line);width:auto}
-:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}
 form{display:grid;gap:12px;margin-top:24px}
 .bar{display:flex;gap:8px;align-items:center;padding-top:12px}
-#out{margin-left:auto}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:20px 0}
-.stat{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px}
-.stat b{display:block;font-size:2rem;line-height:1.1}
+#co{flex:1}#out{margin-left:auto}
+.live{display:flex;align-items:center;gap:8px;color:var(--mute);margin:10px 0}
+.dot{width:12px;height:12px;border-radius:50%;background:#10b981;box-shadow:0 0 0 4px #10b98133}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:16px 0}
+.stat{display:flex;align-items:center;gap:12px;border:1px solid;border-radius:18px;padding:16px 14px;min-height:88px}
+.stat b{display:block;font-size:2rem;line-height:1}
 .stat span{color:var(--mute);font-size:.9rem}
-h2{font-size:1.1rem;margin:28px 0 10px}
-.row{background:var(--card);border:1px solid var(--line);border-left-width:4px;border-radius:14px;padding:12px 14px;margin-bottom:10px;display:flex;justify-content:space-between;gap:10px}
-.Working{border-left-color:var(--warn)}.Done{border-left-color:var(--ok)}.Ontheway{border-left-color:var(--blue)}
-.msg{margin:12px 0;color:var(--bad)}
+.ic{width:44px;height:44px;border-radius:12px;display:grid;place-items:center;flex:none}
+.ic svg{width:22px;height:22px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.red{background:#1c1012;border-color:#3d1a1f}.red .ic{background:#33151a;color:#f87171}
+.amber{background:#18120a;border-color:#4a3410}.amber .ic{background:#2e200b;color:#fbbf24}
+.green{background:#0b1712;border-color:#134a35}.green .ic{background:#10301f;color:#34d399}
+.row{display:flex;justify-content:space-between;gap:10px;border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:10px;background:var(--card)}
+.s-Working{background:#18120a;border-color:#8a5a12}
+.s-Done{background:#0b1712;border-color:#14674a}
+.s-Ontheway{background:#0c1424;border-color:#1d4ed8}
+.big{padding:18px;font-size:1.15rem;border-radius:18px;margin:10px 0;width:100%}
+.b-blue{background:#2563eb;color:#fff}.b-amber{background:#f59e0b;color:#1a1204}.b-green{background:#10b981;color:#04140d}
+.msg{margin:12px 0;color:#f87171}
 </style>
 </head>
 <body>
 <main id="login" hidden>
-  <h1>SyncStaff</h1>
+  <h1>Cleaning Operations Mgt</h1>
   <p class="mute">Sign in to your company’s workspace.</p>
   <form id="lf">
     <input id="em" type="email" placeholder="Email" autocomplete="username" required>
@@ -44,64 +56,89 @@ h2{font-size:1.1rem;margin:28px 0 10px}
 <main id="app" hidden>
   <div class="bar">
     <select id="co" aria-label="Company"></select>
+    <button class="ghost" id="tab" hidden></button>
     <button class="ghost" id="out">Sign out</button>
   </div>
   <h1 id="title"></h1>
   <p class="mute" id="slogan"></p>
-  <p class="mute" id="live"></p>
+  <p class="live" id="live"></p>
   <p class="msg" id="amsg"></p>
   <div id="body"></div>
 </main>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
 <script>
-// 1) Paste your own values here (Supabase > Project Settings > API).
-//    Use the anon (public) key only. NEVER paste the service_role key.
-const SUPABASE_URL = 'https://gwnsrsngjqirctyuhcif.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imd3bnNyc25nanFpcmN0eXVoY2lmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIxMDcwNjYsImV4cCI6MjEwNzY4MzA2Nn0.YgUfpmyDyQjiAaBGPJt-1W7mnazEe9j9qZOaIn7Mu3M';
-
-const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Your Supabase URL and anon key live in config.js (same folder as this file).
+const CFG = window.SYNCSTAFF || {};
+if (!CFG.url || !CFG.anon) {
+  document.body.innerHTML = '<main><h1>Cleaning Operations Mgt</h1><p class="msg">config.js is missing or incomplete.</p></main>';
+  throw new Error('config.js missing');
+}
+const sb = supabase.createClient(CFG.url, CFG.anon);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let companies = [], companyId = null, timer = null;
+const fmt = t => t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', hour12: true }) : '';
+const ICON = {
+  way: '<svg viewBox="0 0 24 24"><path d="M1 3h15v13H1zM16 8h4l3 3v5h-7z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></svg>',
+  work: '<svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',
+  done: '<svg viewBox="0 0 24 24"><path d="M22 11.1V12a10 10 0 11-5.9-9.1"/><path d="M22 4L12 14l-3-3"/></svg>',
+  warn: '<svg viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0zM12 9v4M12 17h.01"/></svg>'
+};
+let companies = [], companyId = null, timer = null, uid = null;
+let memberships = [], staffRows = [], mode = 'dash', role = null, me = null, openLog = null;
 
-function showLogin() {
-  clearInterval(timer);
-  $('app').hidden = true; $('login').hidden = false;
-}
+function showLogin() { clearInterval(timer); $('app').hidden = true; $('login').hidden = false; }
+function fail(err) { $('amsg').textContent = 'Something went wrong: ' + (err.message || err); }
 
 async function showApp() {
   $('login').hidden = true; $('app').hidden = false;
-  // Row Level Security returns only the companies this user may see.
-  const { data, error } = await sb.from('companies').select('id,company_name,slogan').order('company_name');
-  if (error) return fail(error);
-  companies = data || [];
+  const { data: { user } } = await sb.auth.getUser();
+  uid = user.id;
+  const [co, own, mem, stf] = await Promise.all([
+    sb.from('companies').select('id,company_name,slogan').order('company_name'),
+    sb.rpc('is_platform_owner'),
+    sb.from('memberships').select('company_id,role').eq('user_id', uid),
+    sb.from('staff').select('id,company_id,full_name').eq('user_id', uid)
+  ]);
+  if (co.error) return fail(co.error);
+  companies = co.data || []; memberships = mem.data || []; staffRows = stf.data || [];
   if (!companies.length) {
     $('title').textContent = 'No company yet';
     $('body').innerHTML = '<p class="mute">Your account is not linked to a company. Ask the platform owner to add you.</p>';
     return;
   }
   $('co').innerHTML = companies.map(c => `<option value="${c.id}">${esc(c.company_name)}</option>`).join('');
-  // Only the platform owner gets the company switcher.
-  const { data: isOwner } = await sb.rpc('is_platform_owner');
-  $('co').hidden = isOwner !== true;
-  companyId = companies[0].id;
-  $('co').value = companyId;
+  $('co').hidden = own.data !== true;   // only the platform owner gets the switcher
+  companyId = companies[0].id; $('co').value = companyId;
   await load();
-  clearInterval(timer);
-  timer = setInterval(load, 30000);
+  clearInterval(timer); timer = setInterval(load, 30000);
 }
 
-function fail(err) {
-  $('amsg').textContent = 'Could not load data: ' + (err.message || err);
+function ctx() {
+  role = (memberships.find(m => m.company_id === companyId) || {}).role || null;
+  me = staffRows.find(s => s.company_id === companyId) || null;
+  if (role === 'staff' || (mode === 'shift' && !me)) mode = role === 'staff' ? 'shift' : 'dash';
+  $('tab').hidden = !(me && role !== 'staff');
+  $('tab').textContent = mode === 'shift' ? 'Dashboard' : 'My shift';
 }
 
 async function load() {
   const co = companies.find(c => c.id === companyId);
   if (!co) return;
+  ctx();
   $('amsg').textContent = '';
   $('title').textContent = co.company_name;
   $('slogan').textContent = co.slogan || '';
+  $('live').innerHTML = '<span class="dot"></span>Live · ' + esc(fmt(new Date()));
+  if (role === 'staff' && !me) {
+    $('body').innerHTML = '<p class="mute">Your login is not linked to a staff record yet. Ask your manager.</p>';
+    return;
+  }
+  return mode === 'shift' ? loadShift() : loadDash();
+}
+
+async function loadDash() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const today = new Date().toLocaleDateString('en-CA');
   const [st, lg, ui, sc, cl] = await Promise.all([
@@ -116,26 +153,24 @@ async function load() {
   ]);
   const bad = [st, lg, ui, sc, cl].find(r => r.error);
   if (bad) return fail(bad.error);
-
   const names = Object.fromEntries((st.data || []).map(s => [s.id, s.full_name]));
   const clients = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
   const logs = lg.data || [];
   const n = s => logs.filter(l => l.current_status === s).length;
-  const time = t => t ? new Date(t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
-
-  $('live').textContent = 'Updated ' + new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const card = (cls, ic, num, label) =>
+    `<div class="stat ${cls}"><div class="ic">${ICON[ic]}</div><div><b>${num}</b><span>${label}</span></div></div>`;
   $('body').innerHTML = `
     <div class="grid">
-      <div class="stat"><b>${n('On the way')}</b><span>On the way</span></div>
-      <div class="stat"><b>${n('Working')}</b><span>Working now</span></div>
-      <div class="stat"><b>${n('Done')}</b><span>Done today</span></div>
-      <div class="stat"><b>${ui.count ?? 0}</b><span>Urgent issues</span></div>
+      ${card('red', 'way', n('On the way'), 'On the way')}
+      ${card('amber', 'work', n('Working'), 'Working now')}
+      ${card('green', 'done', n('Done'), 'Done today')}
+      ${card('red', 'warn', ui.count ?? 0, 'Urgent issues')}
     </div>
-    <h2>Staff today</h2>
+    <h2>Live staff status</h2>
     ${logs.length ? logs.map(l => `
-      <div class="row ${esc(String(l.current_status).replace(/\s/g, ''))}">
+      <div class="row s-${esc(String(l.current_status).replace(/\s/g, ''))}">
         <div><strong>${esc(names[l.staff_id] || 'Staff member')}</strong><br><span class="mute">${esc(l.current_status)}</span></div>
-        <span class="mute">${esc(time(l.clock_in_time))}</span>
+        <span class="mute">${esc(fmt(l.clock_in_time))}</span>
       </div>`).join('') : '<p class="mute">No staff checked in today.</p>'}
     <h2>Upcoming schedule</h2>
     ${(sc.data || []).length ? sc.data.map(s => `
@@ -144,6 +179,59 @@ async function load() {
         <span class="mute">${esc(s.schedule_date)}<br>${esc((s.start_time || '').slice(0, 5))}</span>
       </div>`).join('') : '<p class="mute">No upcoming jobs.</p>'}`;
 }
+
+async function loadShift() {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const today = new Date().toLocaleDateString('en-CA');
+  const [lg, sc, cl] = await Promise.all([
+    sb.from('staff_logs').select('*').eq('staff_id', me.id)
+      .gte('clock_in_time', start.toISOString()).order('clock_in_time', { ascending: false }),
+    sb.from('schedules').select('*').eq('assigned_staff_id', me.id)
+      .gte('schedule_date', today).order('schedule_date').order('start_time').limit(5),
+    sb.from('clients').select('id,client_name').eq('company_id', companyId)
+  ]);
+  const bad = [lg, sc, cl].find(r => r.error);
+  if (bad) return fail(bad.error);
+  const clients = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
+  const logs = lg.data || [];
+  openLog = logs.find(l => l.current_status !== 'Done') || null;
+  const done = logs.filter(l => l.current_status === 'Done');
+  let btn;
+  if (!openLog) btn = '<button class="big b-blue" data-act="travel">I’m on the way</button><button class="big ghost" data-act="direct">Start work now</button>';
+  else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">Start working</button>';
+  else btn = '<button class="big b-green" data-act="finish">Mark done</button>';
+  $('body').innerHTML = `
+    <h2>Hello, ${esc((me.full_name || '').split(' ')[0])}</h2>
+    ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
+    ${btn}
+    <h2>My upcoming jobs</h2>
+    ${(sc.data || []).length ? sc.data.map(s => `
+      <div class="row"><strong>${esc(clients[s.client_id] || 'Client')}</strong>
+      <span class="mute">${esc(s.schedule_date)} ${esc((s.start_time || '').slice(0, 5))}</span></div>`).join('') : '<p class="mute">No upcoming jobs.</p>'}
+    <h2>Finished today</h2>
+    ${done.length ? done.map(l => `
+      <div class="row s-Done"><span>${esc(fmt(l.clock_in_time))} – ${esc(fmt(l.clock_out_time))}</span>
+      <span class="mute">${esc(l.total_hours_logged ?? '')} h</span></div>`).join('') : '<p class="mute">Nothing finished yet.</p>'}`;
+}
+
+$('body').addEventListener('click', async e => {
+  const b = e.target.closest('button[data-act]');
+  if (!b || !me) return;
+  b.disabled = true;
+  const a = b.dataset.act, now = new Date().toISOString();
+  let r;
+  if (a === 'travel' || a === 'direct') {
+    r = await sb.from('staff_logs').insert({ company_id: companyId, staff_id: me.id,
+      current_status: a === 'travel' ? 'On the way' : 'Working', clock_in_time: now });
+  } else if (a === 'start') {
+    r = await sb.from('staff_logs').update({ current_status: 'Working', clock_in_time: now }).eq('id', openLog.id);
+  } else {
+    const hrs = Math.round((Date.now() - new Date(openLog.clock_in_time)) / 36e5 * 100) / 100;
+    r = await sb.from('staff_logs').update({ current_status: 'Done', clock_out_time: now, total_hours_logged: hrs }).eq('id', openLog.id);
+  }
+  if (r.error) { fail(r.error); b.disabled = false; return; }
+  load();
+});
 
 $('lf').addEventListener('submit', async e => {
   e.preventDefault();
@@ -154,6 +242,7 @@ $('lf').addEventListener('submit', async e => {
   showApp();
 });
 $('co').addEventListener('change', e => { companyId = Number(e.target.value); load(); });
+$('tab').addEventListener('click', () => { mode = mode === 'shift' ? 'dash' : 'shift'; load(); });
 $('out').addEventListener('click', async () => { await sb.auth.signOut(); showLogin(); });
 
 (async () => {

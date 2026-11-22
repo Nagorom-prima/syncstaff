@@ -45,6 +45,14 @@ form{display:grid;gap:12px;margin-top:24px}
 .s-Ontheway{background:#0c1424;border-color:#1d4ed8}
 .big{padding:18px;font-size:1.15rem;border-radius:18px;margin:10px 0;width:100%}
 .b-blue{background:#2563eb;color:#fff}.b-amber{background:#f59e0b;color:#1a1204}.b-green{background:#10b981;color:#04140d}
+.nav{display:flex;gap:8px;overflow-x:auto;margin:14px 0 4px;padding-bottom:4px}
+.nav button{width:auto;white-space:nowrap;background:var(--card);color:var(--text);border:1px solid var(--line);padding:10px 14px}
+.nav button.on{background:#2563eb;color:#fff;border-color:#2563eb}
+.head{display:flex;align-items:center;justify-content:space-between}
+label{display:grid;gap:6px;color:var(--mute);font-size:.9rem}
+.tap{cursor:pointer}
+.nav{display:grid;gap:6px;margin:10px 0;padding:8px;background:var(--card);border:1px solid var(--line);border-radius:16px}
+.nav button{width:100%;text-align:left}
 .msg{margin:12px 0;color:#f87171}
 </style>
 </head>
@@ -62,10 +70,12 @@ form{display:grid;gap:12px;margin-top:24px}
 
 <main id="app" hidden>
   <div class="bar">
+    <button class="ghost" id="menu">☰ Menu</button>
     <select id="co" aria-label="Company"></select>
     <button class="ghost" id="tab" hidden></button>
     <button class="ghost" id="out">Sign out</button>
   </div>
+  <nav class="nav" id="nav" hidden></nav>
   <h1 id="title"></h1>
   <p class="mute" id="slogan"></p>
   <p class="live" id="live"></p>
@@ -94,6 +104,7 @@ const ICON = {
 };
 let companies = [], companyId = null, timer = null, uid = null;
 let memberships = [], staffRows = [], mode = 'dash', role = null, me = null, openLog = null;
+let editing = false, isOwner = false, rowsCache = [], pick = { clients: [], staff: [], projects: [] };
 
 function showLogin() { clearInterval(timer); $('app').hidden = true; $('login').hidden = false; }
 function fail(err) { $('amsg').textContent = 'Something went wrong: ' + (err.message || err); }
@@ -116,10 +127,10 @@ async function showApp() {
     return;
   }
   $('co').innerHTML = companies.map(c => `<option value="${c.id}">${esc(c.company_name)}</option>`).join('');
-  $('co').hidden = own.data !== true;   // only the platform owner gets the switcher
+  isOwner = own.data === true; $('co').hidden = !isOwner;   // only the platform owner gets the switcher
   companyId = companies[0].id; $('co').value = companyId;
   await load();
-  clearInterval(timer); timer = setInterval(load, 30000);
+  clearInterval(timer); timer = setInterval(() => { if (!editing) load(); }, 30000);
 }
 
 function ctx() {
@@ -128,6 +139,11 @@ function ctx() {
   if (role === 'staff' || (mode === 'shift' && !me)) mode = role === 'staff' ? 'shift' : 'dash';
   $('tab').hidden = !(me && role !== 'staff');
   $('tab').textContent = mode === 'shift' ? 'Dashboard' : 'My shift';
+  $('menu').hidden = role === 'staff';
+  if (role === 'staff') $('nav').hidden = true;
+  const seeMoney = isOwner || role === 'owner' || role === 'admin';
+  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['quotes', 'finance'].includes(k))
+    .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
 async function load() {
@@ -142,7 +158,7 @@ async function load() {
     $('body').innerHTML = '<p class="mute">Your login is not linked to a staff record yet. Ask your manager.</p>';
     return;
   }
-  return mode === 'shift' ? loadShift() : loadDash();
+  return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets() : loadList(mode);
 }
 
 async function loadDash() {
@@ -211,6 +227,7 @@ async function loadShift() {
     <h2>Hello, ${esc((me.full_name || '').split(' ')[0])}</h2>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
     ${btn}
+    <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
     <h2>My upcoming jobs</h2>
     ${(sc.data || []).length ? sc.data.map(s => `
       <div class="row"><strong>${esc(clients[s.client_id] || 'Client')}</strong>
@@ -240,6 +257,175 @@ $('body').addEventListener('click', async e => {
   load();
 });
 
+// ---- Pages: list, add and edit ----
+const OPT = {
+  status: ['Pending', 'In progress', 'Completed', 'Cancelled'],
+  ptype: ['Post-Construction Cleaning', 'Industrial Cleaning'],
+  priority: ['Low', 'Medium', 'High'],
+  severity: ['Low', 'Medium', 'High', 'Critical'],
+  ustatus: ['Unresolved', 'In progress', 'Resolved'],
+  txn: ['Payment', 'Expense']
+};
+const MENU = [['dash', 'Dashboard'], ['projects', 'Projects'], ['schedules', 'Schedule'], ['clients', 'Clients'],
+  ['staff', 'Staff'], ['urgent', 'Urgent issues'], ['timesheets', 'Timesheets'], ['quotes', 'Quotations'], ['finance', 'Finances']];
+const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
+const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
+const ENT = {
+  clients: { table: 'clients', label: 'client', title: 'Clients', order: ['client_name', true],
+    fields: [['client_name', 'Name', 'text', 1], ['address', 'Address', 'text'], ['preferred_cleaning_days', 'Preferred cleaning days', 'text']],
+    line: r => [r.client_name, r.address || ''] },
+  staff: { table: 'staff', label: 'staff member', title: 'Staff', order: ['full_name', true],
+    fields: [['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'], ['shift_hours', 'Shift hours', 'text']],
+    line: r => [r.full_name, [r.role, r.phone_number].filter(Boolean).join(' · ')] },
+  schedules: { table: 'schedules', label: 'job', title: 'Schedule', order: ['schedule_date', false],
+    fields: [['client_id', 'Client', 'pick:clients', 1], ['assigned_staff_id', 'Assigned staff', 'pick:staff'], ['schedule_date', 'Date', 'date', 1],
+             ['start_time', 'Start', 'time'], ['end_time', 'End', 'time'], ['status', 'Status', 'pick:status', 0, 'Pending']],
+    line: (r, L) => [L.cn[r.client_id] || 'Client', [r.schedule_date, (r.start_time || '').slice(0, 5), L.sn[r.assigned_staff_id] || 'Unassigned'].filter(Boolean).join(' · ')],
+    badge: r => r.status },
+  projects: { table: 'projects', label: 'project', title: 'Projects', order: ['created_at', false],
+    fields: [['project_name', 'Project name', 'text', 1], ['project_type', 'Type', 'pick:ptype'], ['address', 'Address', 'text'],
+             ['supervisor_id', 'Supervisor', 'pick:staff'], ['team_size', 'Team size', 'number', 0, 1],
+             ['priority', 'Priority', 'pick:priority', 0, 'Medium'], ['status', 'Status', 'pick:status', 0, 'Pending']],
+    line: (r, L) => [r.project_name, [r.project_type, L.sn[r.supervisor_id], r.priority].filter(Boolean).join(' · ')],
+    badge: r => r.status },
+  urgent: { table: 'urgent_issues', label: 'urgent issue', title: 'Urgent issues', order: ['created_at', false],
+    fields: [['issue_title', 'What happened?', 'text', 1], ['description', 'Details', 'text'], ['project_id', 'Project', 'pick:projects'],
+             ['severity_level', 'Severity', 'pick:severity', 0, 'Medium'], ['status', 'Status', 'pick:ustatus', 0, 'Unresolved']],
+    line: (r, L) => [r.issue_title, [r.severity_level, L.pn[r.project_id]].filter(Boolean).join(' · ')],
+    badge: r => r.status },
+  quotes: { table: 'pricing_quotations', label: 'quotation', title: 'Quotations', order: ['created_at', false],
+    fields: [['client_id', 'Client', 'pick:clients'], ['cleaning_type', 'Cleaning type', 'text', 1], ['transport_fare', 'Transport fare', 'number'],
+             ['staff_feeding', 'Staff feeding', 'number'], ['materials_cost', 'Materials', 'number'], ['ladder_cost', 'Ladder', 'number'],
+             ['overhead_cost', 'Overheads', 'number'], ['staff_payment', 'Staff payment', 'number'], ['profit_margin', 'Profit margin (%)', 'number']],
+    compute: d => {
+      COSTS.forEach(k => d[k] = d[k] || 0); d.profit_margin = d.profit_margin || 0;
+      d.final_price = Math.round(COSTS.reduce((a, k) => a + d[k], 0) * (1 + d.profit_margin / 100) * 100) / 100;
+    },
+    line: (r, L) => [L.cn[r.client_id] || r.cleaning_type || 'Quotation', r.cleaning_type || ''],
+    badge: r => fm(r.final_price) },
+  finance: { table: 'financials', label: 'transaction', title: 'Finances', order: ['transaction_date', false],
+    fields: [['transaction_type', 'Type', 'pick:txn', 1, 'Payment'], ['amount', 'Amount', 'number', 1], ['description', 'Description', 'text'],
+             ['payment_method', 'Payment method', 'text'], ['transaction_date', 'Date', 'date', 1, new Date().toLocaleDateString('en-CA')]],
+    line: r => [`${r.transaction_type}: ${fm(r.amount)}`, [r.description, r.transaction_date].filter(Boolean).join(' · ')],
+    badge: r => r.payment_method || '',
+    summary: rows => {
+      const s = t => rows.filter(r => r.transaction_type === t).reduce((a, r) => a + Number(r.amount || 0), 0);
+      const p = s('Payment'), x = s('Expense');
+      return `<div class="grid"><div class="stat green"><div><b>${fm(p)}</b><span>Payments</span></div></div>
+        <div class="stat red"><div><b>${fm(x)}</b><span>Expenses</span></div></div></div><p class="mute">Balance: ${fm(p - x)}</p>`;
+    } }
+};
+
+async function loadList(kind) {
+  const E = ENT[kind];
+  const [rows, cl, st, pr] = await Promise.all([
+    sb.from(E.table).select('*').eq('company_id', companyId).order(E.order[0], { ascending: E.order[1] }),
+    sb.from('clients').select('id,client_name').eq('company_id', companyId).order('client_name'),
+    sb.from('staff').select('id,full_name').eq('company_id', companyId).order('full_name'),
+    sb.from('projects').select('id,project_name').eq('company_id', companyId).order('project_name')
+  ]);
+  const bad = [rows, cl, st, pr].find(r => r.error);
+  if (bad) return fail(bad.error);
+  pick = { clients: cl.data || [], staff: st.data || [], projects: pr.data || [] };
+  rowsCache = rows.data || [];
+  const L = { cn: Object.fromEntries(pick.clients.map(c => [c.id, c.client_name])),
+              sn: Object.fromEntries(pick.staff.map(x => [x.id, x.full_name])),
+              pn: Object.fromEntries(pick.projects.map(x => [x.id, x.project_name])) };
+  $('body').innerHTML = `<div class="head"><h2>${E.title}</h2><button class="ghost" data-add="${kind}">+ Add</button></div>`
+    + (E.summary ? E.summary(rowsCache) : '')
+    + (rowsCache.length ? rowsCache.map((r, i) => {
+        const [a, b] = E.line(r, L), g = E.badge ? E.badge(r) : '';
+        return `<div class="row tap" data-edit="${i}"><div><strong>${esc(a)}</strong><br><span class="mute">${esc(b)}</span></div>${g ? `<span class="mute">${esc(g)}</span>` : ''}</div>`;
+      }).join('') : '<p class="mute">Nothing here yet. Tap + Add.</p>');
+}
+
+async function loadTimesheets() {
+  const from = new Date(); from.setDate(from.getDate() - 6); from.setHours(0, 0, 0, 0);
+  const [lg, st] = await Promise.all([
+    sb.from('staff_logs').select('staff_id,current_status,total_hours_logged').eq('company_id', companyId).gte('clock_in_time', from.toISOString()),
+    sb.from('staff').select('id,full_name').eq('company_id', companyId).order('full_name')
+  ]);
+  const bad = [lg, st].find(r => r.error);
+  if (bad) return fail(bad.error);
+  let total = 0;
+  const rows = (st.data || []).map(x => {
+    const mine = (lg.data || []).filter(l => l.staff_id === x.id);
+    const hrs = mine.reduce((a, l) => a + Number(l.total_hours_logged || 0), 0);
+    total += hrs;
+    return `<div class="row"><div><strong>${esc(x.full_name)}</strong><br><span class="mute">${mine.filter(l => l.current_status === 'Done').length} jobs done</span></div><strong>${hrs.toFixed(1)} h</strong></div>`;
+  });
+  $('body').innerHTML = `<h2>Timesheets · last 7 days</h2><p class="mute">Total: ${total.toFixed(1)} hours</p>${rows.join('') || '<p class="mute">No staff yet.</p>'}`;
+}
+
+function openForm(kind, row) {
+  editing = true;
+  const E = ENT[kind], r = row || {};
+  const field = ([k, label, type, req, def]) => {
+    const v = r[k] ?? def ?? '';
+    let ctl;
+    if (type.startsWith('pick:')) {
+      const src = type.slice(5);
+      const opts = OPT[src] ? OPT[src].map(x => [x, x]) : (pick[src] || []).map(o => [o.id, o.client_name || o.full_name || o.project_name]);
+      ctl = `<select name="${k}" ${req ? 'required' : ''}><option value="">—</option>${opts.map(([id, n]) =>
+        `<option value="${esc(id)}" ${String(id) === String(v) ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+    } else {
+      ctl = `<input name="${k}" type="${type}" ${type === 'number' ? 'step="any" inputmode="decimal"' : ''} value="${esc(type === 'time' ? String(v).slice(0, 5) : v)}" ${req ? 'required' : ''}>`;
+    }
+    return `<label>${label}${req ? ' *' : ''}${ctl}</label>`;
+  };
+  $('body').innerHTML = `<h2>${row ? 'Edit' : 'Add'} ${E.label}</h2>
+    <form id="ef" data-kind="${kind}" data-id="${row ? row.id : ''}">${E.fields.map(field).join('')}
+      ${E.compute ? '<p class="mute" id="qt"></p>' : ''}
+      <button class="big b-blue">Save</button>
+      <button type="button" class="big ghost" style="width:100%" data-cancel="1">Cancel</button>
+    </form><p class="msg" id="fmsg"></p>`;
+  if (E.compute) {
+    const f = $('ef');
+    const upd = () => {
+      const d = {};
+      E.fields.forEach(([k, , t]) => { if (t === 'number') d[k] = Number(f.elements[k].value) || 0; });
+      E.compute(d); $('qt').textContent = 'Final price: ' + fm(d.final_price);
+    };
+    f.addEventListener('input', upd); upd();
+  }
+}
+
+$('body').addEventListener('click', e => {
+  const t = e.target.closest('[data-add],[data-edit],[data-cancel]');
+  if (!t) return;
+  if (t.dataset.cancel) { editing = false; load(); }
+  else if (t.dataset.add) openForm(t.dataset.add, null);
+  else openForm(mode, rowsCache[Number(t.dataset.edit)]);
+});
+
+$('body').addEventListener('submit', async e => {
+  const f = e.target.closest('#ef');
+  if (!f) return;
+  e.preventDefault();
+  const kind = f.dataset.kind, id = f.dataset.id, E = ENT[kind], d = {};
+  E.fields.forEach(([k, , t]) => {
+    const v = f.elements[k].value.trim();
+    d[k] = v === '' ? null : (k.endsWith('_id') || t === 'number') ? Number(v) : v;
+  });
+  if (E.compute) E.compute(d);
+  const { error } = id
+    ? await sb.from(E.table).update(d).eq('id', Number(id))
+    : await sb.from(E.table).insert({ ...d, company_id: companyId });
+  if (error) {
+    $('fmsg').textContent = /row-level security/i.test(error.message)
+      ? 'You do not have permission to do this.' : 'Could not save: ' + error.message;
+    return;
+  }
+  editing = false; load();
+});
+
+$('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
+$('nav').addEventListener('click', e => {
+  const b = e.target.closest('[data-nav]');
+  if (!b) return;
+  editing = false; $('nav').hidden = true; mode = b.dataset.nav; load();
+});
+
 $('lf').addEventListener('submit', async e => {
   e.preventDefault();
   $('lmsg').textContent = '';
@@ -248,8 +434,8 @@ $('lf').addEventListener('submit', async e => {
   $('pw').value = '';
   showApp();
 });
-$('co').addEventListener('change', e => { companyId = Number(e.target.value); load(); });
-$('tab').addEventListener('click', () => { mode = mode === 'shift' ? 'dash' : 'shift'; load(); });
+$('co').addEventListener('change', e => { editing = false; companyId = Number(e.target.value); load(); });
+$('tab').addEventListener('click', () => { editing = false; mode = mode === 'shift' ? 'dash' : 'shift'; load(); });
 $('out').addEventListener('click', async () => { await sb.auth.signOut(); showLogin(); });
 
 (async () => {

@@ -54,10 +54,34 @@ label{display:grid;gap:6px;color:var(--mute);font-size:.9rem}
 .nav{display:grid;gap:6px;margin:10px 0;padding:8px;background:var(--card);border:1px solid var(--line);border-radius:16px}
 .nav button{width:100%;text-align:left}
 .msg{margin:12px 0;color:#f87171}
+.qt{display:grid;grid-template-columns:1fr 34px 66px 92px;gap:8px;padding:10px 8px;border-bottom:1px solid var(--line);font-size:.92rem}
+.qt.h{background:#1c1c20;font-weight:700;border-radius:10px}
+.qt span:last-child,.qt strong:last-child{text-align:right}
+@media print{body{background:#fff}body *{visibility:hidden}#qdoc,#qdoc *{visibility:visible;color:#000!important;background:#fff!important;border-color:#bbb!important}#qdoc{position:absolute;left:0;top:0;width:100%;border:0!important}}
+[data-theme=light]{--bg:#f3f7ff;--card:#ffffff;--line:#dce5f5;--text:#0b2a6f;--mute:#5d6f93;color-scheme:light}
+button{color:var(--bg)}
+h1{background:linear-gradient(90deg,#16a34a,#2563eb);-webkit-background-clip:text;background-clip:text;color:transparent;-webkit-text-fill-color:transparent}
+.stat{border-color:transparent;box-shadow:0 6px 18px rgba(0,0,0,.16)}
+.stat b{color:#fff}.stat span{color:rgba(255,255,255,.92)}
+.stat .ic{background:rgba(255,255,255,.25);color:#fff}
+.stat.red{background:linear-gradient(135deg,#ff6b6b,#e11d74)}
+.stat.amber{background:linear-gradient(135deg,#ffb020,#ff6a00)}
+.stat.green{background:linear-gradient(135deg,#22c55e,#0d9488)}
+.stat.blue{background:linear-gradient(135deg,#38bdf8,#4f46e5)}
+.s-Working{background:rgba(245,158,11,.16);border-color:#f59e0b}
+.s-Done{background:rgba(34,197,94,.16);border-color:#22c55e}
+.s-Ontheway{background:rgba(56,189,248,.16);border-color:#38bdf8}
+.nav button.on{background:linear-gradient(90deg,#16a34a,#2563eb);border-color:transparent}
+.qt.h{background:var(--line)}
+.prog{margin:4px 0 8px}.pt{display:flex;justify-content:space-between;margin-bottom:8px}
+.pb{height:14px;border-radius:99px;background:var(--line);overflow:hidden}
+.pb i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#22c55e,#38bdf8,#a78bfa);transition:width .6s}
+.toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 18px;border-radius:99px;font-weight:700;z-index:100;white-space:nowrap}
 </style>
 </head>
 <body>
 <main id="login" hidden>
+  <button class="ghost themebtn" type="button" style="float:right;margin-top:14px"></button>
   <h1>Cleaning Operations Mgt</h1>
   <p class="mute">Sign in to your company’s workspace.</p>
   <form id="lf">
@@ -71,6 +95,7 @@ label{display:grid;gap:6px;color:var(--mute);font-size:.9rem}
 <main id="app" hidden>
   <div class="bar">
     <button class="ghost" id="menu">☰ Menu</button>
+    <button class="ghost themebtn" type="button"></button>
     <select id="co" aria-label="Company"></select>
     <button class="ghost" id="tab" hidden></button>
     <button class="ghost" id="out">Sign out</button>
@@ -142,7 +167,7 @@ function ctx() {
   $('menu').hidden = role === 'staff';
   if (role === 'staff') $('nav').hidden = true;
   const seeMoney = isOwner || role === 'owner' || role === 'admin';
-  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['quotes', 'finance'].includes(k))
+  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['pricing', 'quotes', 'finance'].includes(k))
     .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
@@ -158,7 +183,9 @@ async function load() {
     $('body').innerHTML = '<p class="mute">Your login is not linked to a staff record yet. Ask your manager.</p>';
     return;
   }
-  return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets() : loadList(mode);
+  if (mode !== 'pricing') qs = null;
+  return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : loadList(mode);
 }
 
 async function loadDash() {
@@ -180,15 +207,19 @@ async function loadDash() {
   const clients = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
   const logs = lg.data || [];
   const n = s => logs.filter(l => l.current_status === s).length;
+  const tot = n('On the way') + n('Working') + n('Done'), pct = tot ? Math.round(n('Done') / tot * 100) : 0;
   const card = (cls, ic, num, label) =>
     `<div class="stat ${cls}"><div class="ic">${ICON[ic]}</div><div><b>${num}</b><span>${label}</span></div></div>`;
   $('body').innerHTML = `
+    <h2 style="margin-top:6px">${greet()}! ${sun()}</h2>
     <div class="grid">
-      ${card('red', 'way', n('On the way'), 'On the way')}
+      ${card('blue', 'way', n('On the way'), 'On the way')}
       ${card('amber', 'work', n('Working'), 'Working now')}
       ${card('green', 'done', n('Done'), 'Done today')}
       ${card('red', 'warn', ui.count ?? 0, 'Urgent issues')}
     </div>
+    <div class="prog"><div class="pt"><strong>Today’s progress</strong><strong>${pct}%</strong></div><div class="pb"><i style="width:${pct}%"></i></div>
+      <p class="mute">${tot === 0 ? 'No jobs started yet. Let’s go! 🚀' : pct === 100 ? 'All done. Amazing work, team! 🎉' : 'Great work, keep it up! 💪'}</p></div>
     <h2>Live staff status</h2>
     ${logs.length ? logs.map(l => `
       <div class="row s-${esc(String(l.current_status).replace(/\s/g, ''))}">
@@ -220,11 +251,11 @@ async function loadShift() {
   openLog = logs.find(l => l.current_status !== 'Done') || null;
   const done = logs.filter(l => l.current_status === 'Done');
   let btn;
-  if (!openLog) btn = '<button class="big b-blue" data-act="travel">I’m on the way</button><button class="big ghost" data-act="direct">Start work now</button>';
-  else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">Start working</button>';
-  else btn = '<button class="big b-green" data-act="finish">Mark done</button>';
+  if (!openLog) btn = '<button class="big b-blue" data-act="travel">🚗 I’m on the way</button><button class="big ghost" data-act="direct">🧽 Start work now</button>';
+  else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">🧽 Start working</button>';
+  else btn = '<button class="big b-green" data-act="finish">✅ Mark done</button>';
   $('body').innerHTML = `
-    <h2>Hello, ${esc((me.full_name || '').split(' ')[0])}</h2>
+    <h2>${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
     ${btn}
     <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
@@ -254,6 +285,7 @@ $('body').addEventListener('click', async e => {
     r = await sb.from('staff_logs').update({ current_status: 'Done', clock_out_time: now, total_hours_logged: hrs }).eq('id', openLog.id);
   }
   if (r.error) { fail(r.error); b.disabled = false; return; }
+  if (a === 'finish') { confetti(); toast('Job complete. Great work! 🎉'); }
   load();
 });
 
@@ -266,8 +298,8 @@ const OPT = {
   ustatus: ['Unresolved', 'In progress', 'Resolved'],
   txn: ['Payment', 'Expense']
 };
-const MENU = [['dash', 'Dashboard'], ['projects', 'Projects'], ['schedules', 'Schedule'], ['clients', 'Clients'],
-  ['staff', 'Staff'], ['urgent', 'Urgent issues'], ['timesheets', 'Timesheets'], ['quotes', 'Quotations'], ['finance', 'Finances']];
+const MENU = [['dash', '📊 Dashboard'], ['projects', '🏗️ Projects'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
+  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['finance', '💳 Finances']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const ENT = {
@@ -293,16 +325,6 @@ const ENT = {
              ['severity_level', 'Severity', 'pick:severity', 0, 'Medium'], ['status', 'Status', 'pick:ustatus', 0, 'Unresolved']],
     line: (r, L) => [r.issue_title, [r.severity_level, L.pn[r.project_id]].filter(Boolean).join(' · ')],
     badge: r => r.status },
-  quotes: { table: 'pricing_quotations', label: 'quotation', title: 'Quotations', order: ['created_at', false],
-    fields: [['client_id', 'Client', 'pick:clients'], ['cleaning_type', 'Cleaning type', 'text', 1], ['transport_fare', 'Transport fare', 'number'],
-             ['staff_feeding', 'Staff feeding', 'number'], ['materials_cost', 'Materials', 'number'], ['ladder_cost', 'Ladder', 'number'],
-             ['overhead_cost', 'Overheads', 'number'], ['staff_payment', 'Staff payment', 'number'], ['profit_margin', 'Profit margin (%)', 'number']],
-    compute: d => {
-      COSTS.forEach(k => d[k] = d[k] || 0); d.profit_margin = d.profit_margin || 0;
-      d.final_price = Math.round(COSTS.reduce((a, k) => a + d[k], 0) * (1 + d.profit_margin / 100) * 100) / 100;
-    },
-    line: (r, L) => [L.cn[r.client_id] || r.cleaning_type || 'Quotation', r.cleaning_type || ''],
-    badge: r => fm(r.final_price) },
   finance: { table: 'financials', label: 'transaction', title: 'Finances', order: ['transaction_date', false],
     fields: [['transaction_type', 'Type', 'pick:txn', 1, 'Payment'], ['amount', 'Amount', 'number', 1], ['description', 'Description', 'text'],
              ['payment_method', 'Payment method', 'text'], ['transaction_date', 'Date', 'date', 1, new Date().toLocaleDateString('en-CA')]],
@@ -419,6 +441,218 @@ $('body').addEventListener('submit', async e => {
   editing = false; load();
 });
 
+// ---- Pricing calculator -> client quotation ----
+const LV = { L: 1, M: 1.5, H: 2 };
+const TYPES = {
+  'Post-Construction': ['Floor washing', 'Window cleaning', 'Doors', 'Kitchen', 'Parlor', 'Passageways'],
+  'Home Cleaning': ['Living room', 'Bedrooms', 'Kitchen', 'Bathrooms', 'Windows', 'Floors']
+};
+const COST_LABELS = [['transport_fare', 'Transport fare'], ['staff_feeding', 'Staff feeding'], ['materials_cost', 'Cost of materials used'],
+  ['ladder_cost', 'Ladder hire (optional)'], ['overhead_cost', 'Overhead costs'], ['staff_payment', 'Staff payment']];
+const ngn = n => '₦' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+let qs = null;
+
+function qTotals() {
+  const sub = COSTS.reduce((a, k) => a + (Number(qs.costs[k]) || 0), 0);
+  const p = Number(qs.profit) || 0;
+  const profit = qs.mode === '%' ? sub * p / 100 : p;
+  return { sub, profit, total: Math.round((sub + profit) * 100) / 100 };
+}
+function spread(items, target) {
+  const w = items.map(i => (Number(i.qty) || 0) * LV[i.level]);
+  const sum = w.reduce((a, b) => a + b, 0) || 1;
+  const amts = w.map(x => Math.round(target * x / sum * 100) / 100);
+  if (amts.length) amts[amts.length - 1] = Math.round((target - amts.slice(0, -1).reduce((a, b) => a + b, 0)) * 100) / 100;
+  return amts;
+}
+
+async function loadPricing() {
+  editing = true;
+  const c = await sb.from('clients').select('id,client_name').eq('company_id', companyId).order('client_name');
+  pick.clients = c.data || [];
+  qs = { type: 'Post-Construction', step: 1, costs: {}, mode: '%', profit: '', client: '', items: [] };
+  renderCosts();
+}
+
+function renderCosts() {
+  $('body').innerHTML = `<h2>Pricing calculator</h2>
+    <div class="nav" style="display:flex">${Object.keys(TYPES).map(t => `<button data-ptype="${t}" style="text-align:center;${qs.type === t ? 'background:#2563eb;color:#fff' : ''}">${t}</button>`).join('')}</div>
+    <form id="pf" onsubmit="return false">${COST_LABELS.map(([k, l]) => `<label>${l}<input name="${k}" type="number" step="any" inputmode="decimal" placeholder="0.00" value="${esc(qs.costs[k] ?? '')}"></label>`).join('')}
+      <label>Profit (${qs.mode})<span style="display:flex;gap:8px"><input name="profit" type="number" step="any" inputmode="decimal" placeholder="0" value="${esc(qs.profit)}"><button type="button" class="ghost" data-pmode="${qs.mode === '%' ? '₦' : '%'}">${qs.mode} ⇄</button></span></label></form>
+    <div id="bd"></div>
+    <button class="big b-blue" id="pgo">Continue to Quotation →</button>
+    <p class="mute">The client sees a clean area-by-area breakdown, never your costs or profit.</p>`;
+  updBreak();
+}
+
+function updBreak() {
+  const t = qTotals();
+  $('bd').innerHTML = `<h2>Breakdown</h2>${COST_LABELS.map(([k, l]) => `<div class="row"><span class="mute">${l.replace(' (optional)', '')}</span><span>${ngn(qs.costs[k])}</span></div>`).join('')}
+    <div class="row"><span class="mute">Subtotal (costs)</span><span>${ngn(t.sub)}</span></div>
+    <div class="row"><span class="mute">Profit</span><span>${ngn(t.profit)}</span></div>
+    <div class="row"><strong>Final price</strong><strong style="font-size:1.4rem">${ngn(t.total)}</strong></div>`;
+  $('pgo').disabled = t.total <= 0;
+}
+
+function renderQuote() {
+  qs.target = qTotals().total;
+  $('body').innerHTML = `<div class="head"><button class="ghost" id="pback">← Edit costs</button><span class="mute">Target total<br><strong style="font-size:1.4rem;color:var(--text)">${ngn(qs.target)}</strong></span></div>
+    <h2>${esc(qs.type)} quotation</h2>
+    <label>Client name<input id="qcl" list="cls" value="${esc(qs.client)}" placeholder="Type or select a client"></label>
+    <datalist id="cls">${pick.clients.map(c => `<option value="${esc(c.client_name)}">`).join('')}</datalist>
+    <h2>Line items (client-facing)</h2><p class="mute">Qty = how many (floors, windows…). Condition = debris level: L low, M medium, H high. Amounts auto-spread to match the target total.</p>
+    ${qs.items.map((it, i) => `<div class="row" style="display:grid;gap:8px">
+      <div style="display:flex;gap:8px"><input data-qi="${i}" data-f="name" value="${esc(it.name)}" placeholder="Item"><input data-qi="${i}" data-f="qty" type="number" min="0" step="any" inputmode="decimal" placeholder="Qty" value="${esc(it.qty)}" style="width:80px"></div>
+      <div style="display:flex;gap:6px;align-items:center">${['L', 'M', 'H'].map(l => `<button class="ghost" data-lv="${i},${l}" style="${it.level === l ? 'background:#2563eb;color:#fff' : ''}">${l}</button>`).join('')}<strong id="am${i}" style="margin-left:auto"></strong><button class="ghost" data-del="${i}">✕</button></div></div>`).join('')}
+    <button class="ghost" data-addline="1">+ Add line item</button>
+    <div class="row"><strong>Total</strong><strong style="font-size:1.4rem">${ngn(qs.target)}</strong></div>
+    <button class="big b-green" id="pgen">Generate Quotation</button><p class="msg" id="fmsg"></p>`;
+  updAmts();
+}
+function updAmts() { spread(qs.items, qs.target).forEach((a, i) => { const el = $('am' + i); if (el) el.textContent = ngn(a); }); }
+
+function qErr(err, btn) { $('fmsg').textContent = 'Could not save: ' + (err.message || err); btn.disabled = false; }
+async function genQuote(btn) {
+  btn.disabled = true;
+  const name = qs.client.trim();
+  if (!name) { $('fmsg').textContent = 'Please enter a client name.'; btn.disabled = false; return; }
+  let cl = pick.clients.find(c => c.client_name.toLowerCase() === name.toLowerCase());
+  if (!cl) {
+    const r = await sb.from('clients').insert({ company_id: companyId, client_name: name }).select('id,client_name').single();
+    if (r.error) return qErr(r.error, btn);
+    cl = r.data;
+  }
+  const t = qTotals(), amts = spread(qs.items, t.total);
+  const items = qs.items.map((it, i) => ({ name: it.name, qty: Number(it.qty) || 0, level: it.level, amount: amts[i] }));
+  const pct = qs.mode === '%' ? Number(qs.profit) || 0 : (t.sub ? Math.round(t.profit / t.sub * 10000) / 100 : 0);
+  const q = await sb.from('pricing_quotations').insert({ company_id: companyId, client_id: cl.id, cleaning_type: TYPE_FULL[qs.type],
+    ...Object.fromEntries(COSTS.map(k => [k, Number(qs.costs[k]) || 0])), profit_margin: pct, final_price: t.total })
+    .select('id,created_at').single();
+  if (q.error) return qErr(q.error, btn);
+  const d = await sb.from('quotation_details').insert({ company_id: companyId, pricing_quotation_id: q.data.id, client_id: cl.id, line_items: items }).select('id').single();
+  if (d.error) return qErr(d.error, btn);
+  confetti(); toast('Quotation ready! ✨');
+  showQuote({ id: q.data.id, detailId: d.data.id, clientId: cl.id, client: cl.client_name, type: TYPE_FULL[qs.type], total: t.total, date: q.data.created_at, items });
+}
+
+const TYPE_FULL = { 'Post-Construction': 'Post-Construction Cleaning', 'Home Cleaning': 'Home Cleaning' };
+const COND = { L: 'Low', M: 'Medium', H: 'High' };
+let curQ = null;
+
+function showQuote(q) {
+  editing = true; qs = null; curQ = q;
+  const co = (companies.find(c => c.id === companyId) || {}).company_name || '';
+  const kind = q.invoice ? 'Invoice' : 'Quotation';
+  const num = (q.invoice ? 'INV-' : 'QT-') + String(q.id).padStart(4, '0');
+  $('body').innerHTML = `<h2>Client ${kind}</h2>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+      <button class="ghost" id="qpdf">⬇ Download PDF</button>
+      ${q.invoice ? '' : '<button class="ghost" id="qinv" style="background:linear-gradient(90deg,#16a34a,#2563eb);color:#fff;border:0">Convert to Invoice</button>'}
+      <button class="ghost" id="qnew">+ New</button></div>
+    <div id="qdoc" class="row" style="display:block;padding:20px">
+      <h2 style="margin:0">${esc(co)}</h2><p class="mute" style="margin:4px 0 14px">${esc(q.type || '')}</p>
+      <p class="mute" style="margin:0">${kind} #${num}<br>${esc(new Date(q.date).toLocaleDateString('en-GB'))}</p>
+      <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
+      <p class="mute" style="margin:0 0 12px">Prepared for: <strong style="color:var(--text)">${esc(q.client)}</strong></p>
+      <div class="qt h"><span>Item</span><span>Qty</span><span>Condition</span><span>Amount</span></div>
+      ${(q.items || []).map(i => `<div class="qt"><span>${esc(i.name)}</span><span>${esc(i.qty)}</span><span>${esc(COND[i.level] || '')}</span><span>${ngn(i.amount)}</span></div>`).join('')}
+      <div class="qt"><span></span><span></span><strong>Total</strong><strong>${ngn(q.total)}</strong></div>
+      <p class="mute" style="margin:16px 0 0;font-size:.85rem">${q.invoice ? '' : 'This quotation is valid for 30 days from the date above. '}Thank you for choosing ${esc(co)}.</p></div>`;
+}
+
+async function toInvoice(btn) {
+  btn.disabled = true;
+  const q = curQ;
+  const r = await sb.from('quotation_details').update({ is_saved_as_invoice: true }).eq('id', q.detailId);
+  if (r.error) { btn.disabled = false; return fail(r.error); }
+  const c = await sb.from('clients').select('total_invoices_issued').eq('id', q.clientId).single();
+  if (!c.error) await sb.from('clients').update({ total_invoices_issued: (c.data.total_invoices_issued || 0) + 1 }).eq('id', q.clientId);
+  q.invoice = true; showQuote(q);
+}
+
+async function loadQuotes() {
+  const [q, d, cl] = await Promise.all([
+    sb.from('pricing_quotations').select('id,client_id,cleaning_type,final_price,created_at').eq('company_id', companyId).order('created_at', { ascending: false }),
+    sb.from('quotation_details').select('id,pricing_quotation_id,line_items,is_saved_as_invoice,pdf_download_count').eq('company_id', companyId),
+    sb.from('clients').select('id,client_name').eq('company_id', companyId)
+  ]);
+  const bad = [q, d, cl].find(r => r.error);
+  if (bad) return fail(bad.error);
+  const cn = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
+  rowsCache = (q.data || []).map(r => {
+    const x = (d.data || []).find(y => y.pricing_quotation_id === r.id) || {};
+    return { id: r.id, detailId: x.id, clientId: r.client_id, client: cn[r.client_id] || 'Client', type: r.cleaning_type, total: r.final_price,
+      date: r.created_at, items: x.line_items || [], invoice: !!x.is_saved_as_invoice, pdf: x.pdf_download_count || 0 };
+  });
+  $('body').innerHTML = `<h2>Quotations</h2>` + (rowsCache.length ? rowsCache.map((r, i) => `
+    <div class="row tap" data-q="${i}"><div><strong>${esc(r.client)}</strong><br><span class="mute">${esc(r.type || '')} · ${esc(new Date(r.date).toLocaleDateString('en-GB'))}${r.invoice ? ' · Invoice' : ''}</span></div><strong>${ngn(r.total)}</strong></div>`).join('')
+    : '<p class="mute">No quotations yet. Create one from Pricing.</p>');
+}
+
+$('body').addEventListener('input', e => {
+  if (!qs) return;
+  const el = e.target, n = el.name;
+  if (el.closest('#pf')) { if (n === 'profit') qs.profit = el.value; else qs.costs[n] = el.value; updBreak(); }
+  else if (el.dataset.qi !== undefined) { qs.items[+el.dataset.qi][el.dataset.f] = el.value; updAmts(); }
+  else if (el.id === 'qcl') qs.client = el.value;
+});
+
+$('body').addEventListener('click', e => {
+  const t = e.target.closest('[data-ptype],[data-pmode],[data-lv],[data-del],[data-addline],[data-q],#pgo,#pback,#pgen,#qpdf,#qinv,#qnew');
+  if (!t) return;
+  const d = t.dataset;
+  if (d.q !== undefined) return showQuote(rowsCache[+d.q]);
+  if (t.id === 'qnew') return loadPricing();
+  if (t.id === 'qinv') return toInvoice(t);
+  if (t.id === 'qpdf') {
+    window.print();
+    if (curQ && curQ.detailId) { curQ.pdf = (curQ.pdf || 0) + 1; sb.from('quotation_details').update({ pdf_download_count: curQ.pdf }).eq('id', curQ.detailId); }
+    return;
+  }
+  if (!qs) return;
+  if (d.ptype) { qs.type = d.ptype; qs.items = []; renderCosts(); }
+  else if (d.pmode) { qs.mode = d.pmode; renderCosts(); }
+  else if (t.id === 'pgo') { if (!qs.items.length) qs.items = TYPES[qs.type].map(n => ({ name: n, qty: 1, level: 'M' })); renderQuote(); }
+  else if (t.id === 'pback') renderCosts();
+  else if (d.lv) { const [i, l] = d.lv.split(','); qs.items[+i].level = l; renderQuote(); }
+  else if (d.del) { qs.items.splice(+d.del, 1); renderQuote(); }
+  else if (d.addline) { qs.items.push({ name: '', qty: 1, level: 'M' }); renderQuote(); }
+  else if (t.id === 'pgen') genQuote(t);
+});
+
+const greet = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'; };
+const sun = () => { const h = new Date().getHours(); return h < 12 ? '☀️' : h < 17 ? '🌤️' : '🌙'; };
+function toast(m) {
+  const t = document.createElement('div'); t.className = 'toast'; t.textContent = m;
+  document.body.appendChild(t); setTimeout(() => t.remove(), 2600);
+}
+function confetti() {
+  const c = document.createElement('canvas');
+  c.style.cssText = 'position:fixed;inset:0;width:100%;height:100%;pointer-events:none;z-index:99';
+  c.width = innerWidth; c.height = innerHeight; document.body.appendChild(c);
+  const g = c.getContext('2d'), cols = ['#22c55e', '#38bdf8', '#f59e0b', '#ec4899', '#a78bfa', '#ef4444'];
+  const ps = Array.from({ length: 90 }, () => ({ x: c.width / 2, y: c.height * .6, vx: (Math.random() - .5) * 14,
+    vy: -Math.random() * 16 - 4, s: 6 + Math.random() * 6, col: cols[Math.floor(Math.random() * cols.length)], r: Math.random() * 6 }));
+  let f = 0;
+  (function tick() {
+    g.clearRect(0, 0, c.width, c.height);
+    ps.forEach(p => { p.vy += .45; p.x += p.vx; p.y += p.vy; p.r += .2; g.save(); g.translate(p.x, p.y); g.rotate(p.r);
+      g.fillStyle = p.col; g.fillRect(-p.s / 2, -p.s / 2, p.s, p.s * .6); g.restore(); });
+    if (++f < 110) requestAnimationFrame(tick); else c.remove();
+  })();
+}
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.querySelector('meta[name=theme-color]').content = t === 'light' ? '#f3f7ff' : '#0a0a0b';
+  document.querySelectorAll('.themebtn').forEach(b => { b.textContent = t === 'light' ? '🌙' : '☀️'; b.setAttribute('aria-label', 'Switch theme'); });
+}
+let savedTheme = null; try { savedTheme = localStorage.getItem('theme'); } catch (e) {}
+applyTheme(savedTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+document.querySelectorAll('.themebtn').forEach(b => b.addEventListener('click', () => {
+  const t = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+  try { localStorage.setItem('theme', t); } catch (e) {}
+  applyTheme(t);
+}));
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
 $('nav').addEventListener('click', e => {
   const b = e.target.closest('[data-nav]');

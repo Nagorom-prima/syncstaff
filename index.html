@@ -77,6 +77,8 @@ h1{background:linear-gradient(90deg,#16a34a,#2563eb);-webkit-background-clip:tex
 .pb{height:14px;border-radius:99px;background:var(--line);overflow:hidden}
 .pb i{display:block;height:100%;border-radius:99px;background:linear-gradient(90deg,#22c55e,#38bdf8,#a78bfa);transition:width .6s}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 18px;border-radius:99px;font-weight:700;z-index:100;white-space:nowrap}
+.stat[data-go],[data-fin]{cursor:pointer}
+.chip{display:inline-block;padding:6px 12px;border-radius:99px;background:var(--line);margin:0 6px 6px 0;font-size:.9rem}
 </style>
 </head>
 <body>
@@ -185,7 +187,7 @@ async function load() {
   }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : loadList(mode);
 }
 
 async function loadDash() {
@@ -208,15 +210,15 @@ async function loadDash() {
   const logs = lg.data || [];
   const n = s => logs.filter(l => l.current_status === s).length;
   const tot = n('On the way') + n('Working') + n('Done'), pct = tot ? Math.round(n('Done') / tot * 100) : 0;
-  const card = (cls, ic, num, label) =>
-    `<div class="stat ${cls}"><div class="ic">${ICON[ic]}</div><div><b>${num}</b><span>${label}</span></div></div>`;
+  const card = (cls, ic, num, label, go) =>
+    `<div class="stat ${cls}" data-go="${go}"><div class="ic">${ICON[ic]}</div><div><b>${num}</b><span>${label} ›</span></div></div>`;
   $('body').innerHTML = `
     <h2 style="margin-top:6px">${greet()}! ${sun()}</h2>
     <div class="grid">
-      ${card('blue', 'way', n('On the way'), 'On the way')}
-      ${card('amber', 'work', n('Working'), 'Working now')}
-      ${card('green', 'done', n('Done'), 'Done today')}
-      ${card('red', 'warn', ui.count ?? 0, 'Urgent issues')}
+      ${card('blue', 'way', n('On the way'), 'On the way', 'act:On the way')}
+      ${card('amber', 'work', n('Working'), 'Working now', 'act:Working')}
+      ${card('green', 'done', n('Done'), 'Done today', 'act:Done')}
+      ${card('red', 'warn', ui.count ?? 0, 'Urgent issues', 'urgent')}
     </div>
     <div class="prog"><div class="pt"><strong>Today’s progress</strong><strong>${pct}%</strong></div><div class="pb"><i style="width:${pct}%"></i></div>
       <p class="mute">${tot === 0 ? 'No jobs started yet. Let’s go! 🚀' : pct === 100 ? 'All done. Amazing work, team! 🎉' : 'Great work, keep it up! 💪'}</p></div>
@@ -237,12 +239,13 @@ async function loadDash() {
 async function loadShift() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const today = new Date().toLocaleDateString('en-CA');
-  const [lg, sc, cl] = await Promise.all([
+  const [lg, sc, cl, pr] = await Promise.all([
     sb.from('staff_logs').select('*').eq('staff_id', me.id)
       .gte('clock_in_time', start.toISOString()).order('clock_in_time', { ascending: false }),
     sb.from('schedules').select('*').eq('assigned_staff_id', me.id)
       .gte('schedule_date', today).order('schedule_date').order('start_time').limit(5),
-    sb.from('clients').select('id,client_name').eq('company_id', companyId)
+    sb.from('clients').select('id,client_name').eq('company_id', companyId),
+    sb.from('projects').select('id,project_name').eq('company_id', companyId).neq('status', 'Completed')
   ]);
   const bad = [lg, sc, cl].find(r => r.error);
   if (bad) return fail(bad.error);
@@ -250,6 +253,7 @@ async function loadShift() {
   const logs = lg.data || [];
   openLog = logs.find(l => l.current_status !== 'Done') || null;
   const done = logs.filter(l => l.current_status === 'Done');
+  const projSel = !openLog && (pr.data || []).length ? `<label>Project (optional)<select id="sproj"><option value="">—</option>${pr.data.map(x => `<option value="${x.id}">${esc(x.project_name)}</option>`).join('')}</select></label>` : '';
   let btn;
   if (!openLog) btn = '<button class="big b-blue" data-act="travel">🚗 I’m on the way</button><button class="big ghost" data-act="direct">🧽 Start work now</button>';
   else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">🧽 Start working</button>';
@@ -257,7 +261,7 @@ async function loadShift() {
   $('body').innerHTML = `
     <h2>${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
-    ${btn}
+    ${projSel}${btn}
     <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
     <h2>My upcoming jobs</h2>
     ${(sc.data || []).length ? sc.data.map(s => `
@@ -277,7 +281,7 @@ $('body').addEventListener('click', async e => {
   let r;
   if (a === 'travel' || a === 'direct') {
     r = await sb.from('staff_logs').insert({ company_id: companyId, staff_id: me.id,
-      current_status: a === 'travel' ? 'On the way' : 'Working', clock_in_time: now });
+      current_status: a === 'travel' ? 'On the way' : 'Working', clock_in_time: now, project_id: Number(($('sproj') || {}).value) || null });
   } else if (a === 'start') {
     r = await sb.from('staff_logs').update({ current_status: 'Working', clock_in_time: now }).eq('id', openLog.id);
   } else {
@@ -296,9 +300,10 @@ const OPT = {
   priority: ['Low', 'Medium', 'High'],
   severity: ['Low', 'Medium', 'High', 'Critical'],
   ustatus: ['Unresolved', 'In progress', 'Resolved'],
-  txn: ['Payment', 'Expense']
+  txn: ['Payment', 'Expense'],
+  jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
-const MENU = [['dash', '📊 Dashboard'], ['projects', '🏗️ Projects'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
+const MENU = [['dash', '📊 Dashboard'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
   ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['finance', '💳 Finances']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -310,20 +315,21 @@ const ENT = {
     fields: [['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'], ['shift_hours', 'Shift hours', 'text']],
     line: r => [r.full_name, [r.role, r.phone_number].filter(Boolean).join(' · ')] },
   schedules: { table: 'schedules', label: 'job', title: 'Schedule', order: ['schedule_date', false],
-    fields: [['client_id', 'Client', 'pick:clients', 1], ['assigned_staff_id', 'Assigned staff', 'pick:staff'], ['schedule_date', 'Date', 'date', 1],
+    fields: [['client_id', 'Client', 'pick:clients', 1], ['job_type', 'Job type', 'pick:jtype'], ['assigned_staff_id', 'Assigned staff', 'pick:staff'], ['schedule_date', 'Date', 'date', 1],
              ['start_time', 'Start', 'time'], ['end_time', 'End', 'time'], ['status', 'Status', 'pick:status', 0, 'Pending']],
-    line: (r, L) => [L.cn[r.client_id] || 'Client', [r.schedule_date, (r.start_time || '').slice(0, 5), L.sn[r.assigned_staff_id] || 'Unassigned'].filter(Boolean).join(' · ')],
+    line: (r, L) => [L.cn[r.client_id] || 'Client', [r.job_type, r.schedule_date, (r.start_time || '').slice(0, 5), L.sn[r.assigned_staff_id] || 'Unassigned'].filter(Boolean).join(' · ')],
     badge: r => r.status },
-  projects: { table: 'projects', label: 'project', title: 'Projects', order: ['created_at', false],
-    fields: [['project_name', 'Project name', 'text', 1], ['project_type', 'Type', 'pick:ptype'], ['address', 'Address', 'text'],
+  projects: { table: 'projects', label: 'project', title: 'Post-Construction projects', order: ['created_at', false],
+    fields: [['project_name', 'Project name', 'text', 1], ['project_type', 'Type', 'pick:ptype', 0, 'Post-Construction Cleaning'], ['address', 'Address', 'text'],
              ['supervisor_id', 'Supervisor', 'pick:staff'], ['team_size', 'Team size', 'number', 0, 1],
              ['priority', 'Priority', 'pick:priority', 0, 'Medium'], ['status', 'Status', 'pick:status', 0, 'Pending']],
     line: (r, L) => [r.project_name, [r.project_type, L.sn[r.supervisor_id], r.priority].filter(Boolean).join(' · ')],
-    badge: r => r.status },
+    badge: (r, L) => [r.status, L.hrs[r.id] ? L.hrs[r.id].toFixed(1) + ' h' : ''].filter(Boolean).join(' · '),
+    summary: (rows, L) => `<p class="mute">⏱️ Total hours tracked: <strong style="color:var(--text)">${Object.values(L.hrs).reduce((a, b) => a + b, 0).toFixed(1)} h</strong> across ${rows.length} project${rows.length === 1 ? '' : 's'}</p>` },
   urgent: { table: 'urgent_issues', label: 'urgent issue', title: 'Urgent issues', order: ['created_at', false],
-    fields: [['issue_title', 'What happened?', 'text', 1], ['description', 'Details', 'text'], ['project_id', 'Project', 'pick:projects'],
+    fields: [['issue_title', 'What happened?', 'text', 1], ['description', 'Details', 'text'], ['project_id', 'Project', 'pick:projects'], ['job_type', 'Job type', 'pick:jtype'],
              ['severity_level', 'Severity', 'pick:severity', 0, 'Medium'], ['status', 'Status', 'pick:ustatus', 0, 'Unresolved']],
-    line: (r, L) => [r.issue_title, [r.severity_level, L.pn[r.project_id]].filter(Boolean).join(' · ')],
+    line: (r, L) => [r.issue_title, [r.severity_level, r.job_type, L.pn[r.project_id]].filter(Boolean).join(' · ')],
     badge: r => r.status },
   finance: { table: 'financials', label: 'transaction', title: 'Finances', order: ['transaction_date', false],
     fields: [['transaction_type', 'Type', 'pick:txn', 1, 'Payment'], ['amount', 'Amount', 'number', 1], ['description', 'Description', 'text'],
@@ -333,30 +339,33 @@ const ENT = {
     summary: rows => {
       const s = t => rows.filter(r => r.transaction_type === t).reduce((a, r) => a + Number(r.amount || 0), 0);
       const p = s('Payment'), x = s('Expense');
-      return `<div class="grid"><div class="stat green"><div><b>${fm(p)}</b><span>Payments</span></div></div>
-        <div class="stat red"><div><b>${fm(x)}</b><span>Expenses</span></div></div></div><p class="mute">Balance: ${fm(p - x)}</p>`;
+      return `<div class="grid"><div class="stat green" data-fin="Payment"><div><b>${fm(p)}</b><span>Payments ›</span></div></div>
+        <div class="stat red" data-fin="Expense"><div><b>${fm(x)}</b><span>Expenses ›</span></div></div></div><p class="mute">Balance: ${fm(p - x)} ${finFilter !== 'all' ? `· Showing ${finFilter}s <button class="ghost" data-fin="all" style="padding:4px 10px">Show all</button>` : ''}</p>`;
     } }
 };
 
 async function loadList(kind) {
   const E = ENT[kind];
-  const [rows, cl, st, pr] = await Promise.all([
+  const [rows, cl, st, pr, hr] = await Promise.all([
     sb.from(E.table).select('*').eq('company_id', companyId).order(E.order[0], { ascending: E.order[1] }),
     sb.from('clients').select('id,client_name').eq('company_id', companyId).order('client_name'),
     sb.from('staff').select('id,full_name').eq('company_id', companyId).order('full_name'),
-    sb.from('projects').select('id,project_name').eq('company_id', companyId).order('project_name')
+    sb.from('projects').select('id,project_name').eq('company_id', companyId).order('project_name'),
+    kind === 'projects' ? sb.from('staff_logs').select('project_id,total_hours_logged').eq('company_id', companyId).not('project_id', 'is', null) : Promise.resolve({ data: [] })
   ]);
-  const bad = [rows, cl, st, pr].find(r => r.error);
+  const bad = [rows, cl, st, pr, hr].find(r => r.error);
   if (bad) return fail(bad.error);
   pick = { clients: cl.data || [], staff: st.data || [], projects: pr.data || [] };
   rowsCache = rows.data || [];
   const L = { cn: Object.fromEntries(pick.clients.map(c => [c.id, c.client_name])),
               sn: Object.fromEntries(pick.staff.map(x => [x.id, x.full_name])),
-              pn: Object.fromEntries(pick.projects.map(x => [x.id, x.project_name])) };
+              pn: Object.fromEntries(pick.projects.map(x => [x.id, x.project_name])),
+              hrs: (hr.data || []).reduce((m, l) => (m[l.project_id] = (m[l.project_id] || 0) + Number(l.total_hours_logged || 0), m), {}) };
   $('body').innerHTML = `<div class="head"><h2>${E.title}</h2><button class="ghost" data-add="${kind}">+ Add</button></div>`
-    + (E.summary ? E.summary(rowsCache) : '')
+    + (E.summary ? E.summary(rowsCache, L) : '')
     + (rowsCache.length ? rowsCache.map((r, i) => {
-        const [a, b] = E.line(r, L), g = E.badge ? E.badge(r) : '';
+        if (kind === 'finance' && finFilter !== 'all' && r.transaction_type !== finFilter) return '';
+        const [a, b] = E.line(r, L), g = E.badge ? E.badge(r, L) : '';
         return `<div class="row tap" data-edit="${i}"><div><strong>${esc(a)}</strong><br><span class="mute">${esc(b)}</span></div>${g ? `<span class="mute">${esc(g)}</span>` : ''}</div>`;
       }).join('') : '<p class="mute">Nothing here yet. Tap + Add.</p>');
 }
@@ -417,6 +426,7 @@ $('body').addEventListener('click', e => {
   if (!t) return;
   if (t.dataset.cancel) { editing = false; load(); }
   else if (t.dataset.add) openForm(t.dataset.add, null);
+  else if (mode === 'clients') showClient(rowsCache[Number(t.dataset.edit)]);
   else openForm(mode, rowsCache[Number(t.dataset.edit)]);
 });
 
@@ -653,6 +663,61 @@ document.querySelectorAll('.themebtn').forEach(b => b.addEventListener('click', 
   try { localStorage.setItem('theme', t); } catch (e) {}
   applyTheme(t);
 }));
+// ---- Dashboard drill-down, client profile, finance filter ----
+let actFilter = 'Working', finFilter = 'all', curClient = null;
+
+async function loadActivity() {
+  const start = new Date(); start.setHours(0, 0, 0, 0);
+  const [lg, st, pr] = await Promise.all([
+    sb.from('staff_logs').select('*').eq('company_id', companyId).eq('current_status', actFilter)
+      .gte('clock_in_time', start.toISOString()).order('clock_in_time', { ascending: false }),
+    sb.from('staff').select('id,full_name').eq('company_id', companyId),
+    sb.from('projects').select('id,project_name').eq('company_id', companyId)
+  ]);
+  const bad = [lg, st, pr].find(r => r.error);
+  if (bad) return fail(bad.error);
+  const sn = Object.fromEntries((st.data || []).map(x => [x.id, x.full_name]));
+  const pn = Object.fromEntries((pr.data || []).map(x => [x.id, x.project_name]));
+  const title = { 'On the way': '🚗 On the way', Working: '🧽 Working now', Done: '✅ Done today' }[actFilter] || actFilter;
+  $('body').innerHTML = `<div class="head"><button class="ghost" data-go="dash">← Dashboard</button></div><h2>${title}</h2>`
+    + ((lg.data || []).length ? lg.data.map(l => `
+      <div class="row s-${esc(String(l.current_status).replace(/\s/g, ''))}">
+        <div><strong>${esc(sn[l.staff_id] || 'Staff member')}</strong><br><span class="mute">${esc(pn[l.project_id] || 'No project')} · ${esc(fmt(l.clock_in_time))}${l.clock_out_time ? ' – ' + esc(fmt(l.clock_out_time)) : ''}</span></div>
+        ${l.total_hours_logged ? `<strong>${esc(l.total_hours_logged)} h</strong>` : ''}</div>`).join('')
+      : '<p class="mute">Nobody here right now. 🌤️</p>');
+}
+
+async function showClient(c) {
+  editing = true; curClient = c;
+  const [q, d, sc, st] = await Promise.all([
+    sb.from('pricing_quotations').select('id,final_price,created_at,cleaning_type').eq('company_id', companyId).eq('client_id', c.id).order('created_at', { ascending: false }),
+    sb.from('quotation_details').select('pricing_quotation_id,is_saved_as_invoice').eq('company_id', companyId).eq('client_id', c.id),
+    sb.from('schedules').select('assigned_staff_id').eq('company_id', companyId).eq('client_id', c.id),
+    sb.from('staff').select('id,full_name').eq('company_id', companyId)
+  ]);
+  const inv = (d.data || []).filter(x => x.is_saved_as_invoice).map(x => (q.data || []).find(y => y.id === x.pricing_quotation_id)).filter(Boolean);
+  const sn = Object.fromEntries((st.data || []).map(x => [x.id, x.full_name]));
+  const ids = [...new Set((sc.data || []).map(x => x.assigned_staff_id).filter(Boolean))];
+  const total = inv.reduce((a, r) => a + Number(r.final_price || 0), 0);
+  $('body').innerHTML = `<div class="head"><button class="ghost" data-go="clients">← Clients</button><button class="ghost" data-cedit="1">✏️ Edit</button></div>
+    <h2 style="margin-bottom:2px">${esc(c.client_name)}</h2>
+    <p class="mute" style="margin-top:0">${esc([c.address, c.preferred_cleaning_days].filter(Boolean).join(' · '))}</p>
+    <h2>👷 Assigned staff</h2>${ids.length ? ids.map(id => `<span class="chip">${esc(sn[id] || 'Staff')}</span>`).join('') : '<p class="mute">No staff scheduled for this client yet.</p>'}
+    <h2>🧾 Invoice history</h2><p class="mute">${inv.length} invoice${inv.length === 1 ? '' : 's'} · ${ngn(total)} total</p>
+    ${inv.map(r => `<div class="row"><div><strong>INV-${String(r.id).padStart(4, '0')}</strong><br><span class="mute">${esc(r.cleaning_type || '')} · ${esc(new Date(r.created_at).toLocaleDateString('en-GB'))}</span></div><strong>${ngn(r.final_price)}</strong></div>`).join('')}`;
+}
+
+$('body').addEventListener('click', e => {
+  const g = e.target.closest('[data-go],[data-fin],[data-cedit]');
+  if (!g) return;
+  editing = false;
+  if (g.dataset.cedit) { openForm('clients', curClient); return; }
+  if (g.dataset.fin) { finFilter = g.dataset.fin; load(); return; }
+  const v = g.dataset.go;
+  if (v.startsWith('act:')) { actFilter = v.slice(4); mode = 'activity'; } else mode = v;
+  load();
+});
+
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
 $('nav').addEventListener('click', e => {
   const b = e.target.closest('[data-nav]');

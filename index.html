@@ -79,6 +79,8 @@ h1{background:linear-gradient(90deg,#16a34a,#2563eb);-webkit-background-clip:tex
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:var(--text);color:var(--bg);padding:12px 18px;border-radius:99px;font-weight:700;z-index:100;white-space:nowrap}
 .stat[data-go],[data-fin]{cursor:pointer}
 .chip{display:inline-block;padding:6px 12px;border-radius:99px;background:var(--line);margin:0 6px 6px 0;font-size:.9rem}
+.av{border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#22c55e,#38bdf8);color:#fff;font-weight:700;flex:none;overflow:hidden}
+a{color:#38bdf8}
 </style>
 </head>
 <body>
@@ -144,7 +146,7 @@ async function showApp() {
     sb.from('companies').select('id,company_name,slogan').order('company_name'),
     sb.rpc('is_platform_owner'),
     sb.from('memberships').select('company_id,role').eq('user_id', uid),
-    sb.from('staff').select('id,company_id,full_name').eq('user_id', uid)
+    sb.from('staff').select('id,company_id,full_name,photo_url,status').eq('user_id', uid)
   ]);
   if (co.error) return fail(co.error);
   companies = co.data || []; memberships = mem.data || []; staffRows = stf.data || [];
@@ -185,9 +187,13 @@ async function load() {
     $('body').innerHTML = '<p class="mute">Your login is not linked to a staff record yet. Ask your manager.</p>';
     return;
   }
+  if (role === 'staff' && me && me.status === 'Terminated') {
+    $('body').innerHTML = '<p class="mute">Your staff account is inactive. Please contact your manager.</p>';
+    return;
+  }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : loadList(mode);
 }
 
 async function loadDash() {
@@ -253,13 +259,15 @@ async function loadShift() {
   const logs = lg.data || [];
   openLog = logs.find(l => l.current_status !== 'Done') || null;
   const done = logs.filter(l => l.current_status === 'Done');
-  const projSel = !openLog && (pr.data || []).length ? `<label>Project (optional)<select id="sproj"><option value="">—</option>${pr.data.map(x => `<option value="${x.id}">${esc(x.project_name)}</option>`).join('')}</select></label>` : '';
+  const projSel = !openLog ? `<label>Job type<select id="sjt">${OPT.jtype.map(j => `<option>${j}</option>`).join('')}</select></label>
+    <label>Client (optional)<select id="scl"><option value="">—</option>${(cl.data || []).map(c => `<option value="${c.id}">${esc(c.client_name)}</option>`).join('')}</select></label>
+    ${(pr.data || []).length ? `<label>Project (optional)<select id="sproj"><option value="">—</option>${pr.data.map(x => `<option value="${x.id}">${esc(x.project_name)}</option>`).join('')}</select></label>` : ''}` : '';
   let btn;
   if (!openLog) btn = '<button class="big b-blue" data-act="travel">🚗 I’m on the way</button><button class="big ghost" data-act="direct">🧽 Start work now</button>';
   else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">🧽 Start working</button>';
   else btn = '<button class="big b-green" data-act="finish">✅ Mark done</button>';
   $('body').innerHTML = `
-    <h2>${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2>
+    <div style="display:flex;align-items:center;gap:12px;margin-top:18px">${av(me.full_name, me.photo_url, 56)}<div><h2 style="margin:0">${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2><label class="chip" style="cursor:pointer;margin:6px 0 0">📷 Change photo<input id="myphoto" type="file" accept="image/*" hidden></label></div></div>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
     ${projSel}${btn}
     <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
@@ -278,12 +286,15 @@ $('body').addEventListener('click', async e => {
   if (!b || !me) return;
   b.disabled = true;
   const a = b.dataset.act, now = new Date().toISOString();
-  let r;
+  let r, pos = null;
+  if (a !== 'finish') { toast('Getting your location 📍'); pos = await getPos(); }
   if (a === 'travel' || a === 'direct') {
     r = await sb.from('staff_logs').insert({ company_id: companyId, staff_id: me.id,
-      current_status: a === 'travel' ? 'On the way' : 'Working', clock_in_time: now, project_id: Number(($('sproj') || {}).value) || null });
+      current_status: a === 'travel' ? 'On the way' : 'Working', clock_in_time: now, project_id: Number(($('sproj') || {}).value) || null,
+      client_id: Number(($('scl') || {}).value) || null, job_type: ($('sjt') || {}).value || null,
+      latitude: pos ? pos.lat : null, longitude: pos ? pos.lng : null });
   } else if (a === 'start') {
-    r = await sb.from('staff_logs').update({ current_status: 'Working', clock_in_time: now }).eq('id', openLog.id);
+    r = await sb.from('staff_logs').update({ current_status: 'Working', clock_in_time: now, ...(pos ? { latitude: pos.lat, longitude: pos.lng } : {}) }).eq('id', openLog.id);
   } else {
     const hrs = Math.round((Date.now() - new Date(openLog.clock_in_time)) / 36e5 * 100) / 100;
     r = await sb.from('staff_logs').update({ current_status: 'Done', clock_out_time: now, total_hours_logged: hrs }).eq('id', openLog.id);
@@ -301,9 +312,10 @@ const OPT = {
   severity: ['Low', 'Medium', 'High', 'Critical'],
   ustatus: ['Unresolved', 'In progress', 'Resolved'],
   txn: ['Payment', 'Expense'],
+  sstatus: ['Active', 'Terminated'],
   jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
-const MENU = [['dash', '📊 Dashboard'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
+const MENU = [['dash', '📊 Dashboard'], ['home', '🏠 Home Cleaning'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
   ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['finance', '💳 Finances']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
@@ -312,8 +324,11 @@ const ENT = {
     fields: [['client_name', 'Name', 'text', 1], ['address', 'Address', 'text'], ['preferred_cleaning_days', 'Preferred cleaning days', 'text']],
     line: r => [r.client_name, r.address || ''] },
   staff: { table: 'staff', label: 'staff member', title: 'Staff', order: ['full_name', true],
-    fields: [['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'], ['shift_hours', 'Shift hours', 'text']],
-    line: r => [r.full_name, [r.role, r.phone_number].filter(Boolean).join(' · ')] },
+    fields: [['photo', 'Profile photo', 'photo'], ['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'],
+             ['shift_hours', 'Shift hours', 'text'], ['status', 'Status', 'pick:sstatus', 0, 'Active']],
+    line: r => [r.full_name, [r.role, r.phone_number].filter(Boolean).join(' · ')],
+    avatar: r => av(r.full_name, r.photo_url),
+    badge: r => r.status === 'Terminated' ? '⛔ Terminated' : '🟢 Active' },
   schedules: { table: 'schedules', label: 'job', title: 'Schedule', order: ['schedule_date', false],
     fields: [['client_id', 'Client', 'pick:clients', 1], ['job_type', 'Job type', 'pick:jtype'], ['assigned_staff_id', 'Assigned staff', 'pick:staff'], ['schedule_date', 'Date', 'date', 1],
              ['start_time', 'Start', 'time'], ['end_time', 'End', 'time'], ['status', 'Status', 'pick:status', 0, 'Pending']],
@@ -349,7 +364,7 @@ async function loadList(kind) {
   const [rows, cl, st, pr, hr] = await Promise.all([
     sb.from(E.table).select('*').eq('company_id', companyId).order(E.order[0], { ascending: E.order[1] }),
     sb.from('clients').select('id,client_name').eq('company_id', companyId).order('client_name'),
-    sb.from('staff').select('id,full_name').eq('company_id', companyId).order('full_name'),
+    sb.from('staff').select('id,full_name,photo_url,status').eq('company_id', companyId).order('full_name'),
     sb.from('projects').select('id,project_name').eq('company_id', companyId).order('project_name'),
     kind === 'projects' ? sb.from('staff_logs').select('project_id,total_hours_logged').eq('company_id', companyId).not('project_id', 'is', null) : Promise.resolve({ data: [] })
   ]);
@@ -366,7 +381,7 @@ async function loadList(kind) {
     + (rowsCache.length ? rowsCache.map((r, i) => {
         if (kind === 'finance' && finFilter !== 'all' && r.transaction_type !== finFilter) return '';
         const [a, b] = E.line(r, L), g = E.badge ? E.badge(r, L) : '';
-        return `<div class="row tap" data-edit="${i}"><div><strong>${esc(a)}</strong><br><span class="mute">${esc(b)}</span></div>${g ? `<span class="mute">${esc(g)}</span>` : ''}</div>`;
+        return `<div class="row tap" data-edit="${i}">${E.avatar ? E.avatar(r) : ''}<div style="flex:1"><strong>${esc(a)}</strong><br><span class="mute">${esc(b)}</span></div>${g ? `<span class="mute">${esc(g)}</span>` : ''}</div>`;
       }).join('') : '<p class="mute">Nothing here yet. Tap + Add.</p>');
 }
 
@@ -396,9 +411,11 @@ function openForm(kind, row) {
     let ctl;
     if (type.startsWith('pick:')) {
       const src = type.slice(5);
-      const opts = OPT[src] ? OPT[src].map(x => [x, x]) : (pick[src] || []).map(o => [o.id, o.client_name || o.full_name || o.project_name]);
+      const opts = OPT[src] ? OPT[src].map(x => [x, x]) : (pick[src] || []).filter(o => o.status !== 'Terminated').map(o => [o.id, o.client_name || o.full_name || o.project_name]);
       ctl = `<select name="${k}" ${req ? 'required' : ''}><option value="">—</option>${opts.map(([id, n]) =>
         `<option value="${esc(id)}" ${String(id) === String(v) ? 'selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+    } else if (type === 'photo') {
+      ctl = '<input name="photo" type="file" accept="image/*">';
     } else {
       ctl = `<input name="${k}" type="${type}" ${type === 'number' ? 'step="any" inputmode="decimal"' : ''} value="${esc(type === 'time' ? String(v).slice(0, 5) : v)}" ${req ? 'required' : ''}>`;
     }
@@ -436,10 +453,13 @@ $('body').addEventListener('submit', async e => {
   e.preventDefault();
   const kind = f.dataset.kind, id = f.dataset.id, E = ENT[kind], d = {};
   E.fields.forEach(([k, , t]) => {
+    if (t === 'photo') return;
     const v = f.elements[k].value.trim();
     d[k] = v === '' ? null : (k.endsWith('_id') || t === 'number') ? Number(v) : v;
   });
   if (E.compute) E.compute(d);
+  const file = f.elements.photo && f.elements.photo.files[0];
+  if (file) { try { d.photo_url = await uploadPhoto(file); } catch (err) { $('fmsg').textContent = 'Photo upload failed: ' + (err.message || err); return; } }
   const { error } = id
     ? await sb.from(E.table).update(d).eq('id', Number(id))
     : await sb.from(E.table).insert({ ...d, company_id: companyId });
@@ -682,7 +702,7 @@ async function loadActivity() {
   $('body').innerHTML = `<div class="head"><button class="ghost" data-go="dash">← Dashboard</button></div><h2>${title}</h2>`
     + ((lg.data || []).length ? lg.data.map(l => `
       <div class="row s-${esc(String(l.current_status).replace(/\s/g, ''))}">
-        <div><strong>${esc(sn[l.staff_id] || 'Staff member')}</strong><br><span class="mute">${esc(pn[l.project_id] || 'No project')} · ${esc(fmt(l.clock_in_time))}${l.clock_out_time ? ' – ' + esc(fmt(l.clock_out_time)) : ''}</span></div>
+        <div><strong>${esc(sn[l.staff_id] || 'Staff member')}</strong><br><span class="mute">${esc(pn[l.project_id] || 'No project')} · ${esc(fmt(l.clock_in_time))}${l.clock_out_time ? ' – ' + esc(fmt(l.clock_out_time)) : ''}${l.latitude != null ? ` · <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">📍 Map</a>` : ''}</span></div>
         ${l.total_hours_logged ? `<strong>${esc(l.total_hours_logged)} h</strong>` : ''}</div>`).join('')
       : '<p class="mute">Nobody here right now. 🌤️</p>');
 }
@@ -716,6 +736,85 @@ $('body').addEventListener('click', e => {
   const v = g.dataset.go;
   if (v.startsWith('act:')) { actFilter = v.slice(4); mode = 'activity'; } else mode = v;
   load();
+});
+
+// ---- Photos, location, Home Cleaning page ----
+const av = (name, url, size = 44) => `<span class="av" style="width:${size}px;height:${size}px">${url
+  ? `<img src="${esc(url)}" alt="" style="width:100%;height:100%;object-fit:cover">`
+  : esc((name || '?').trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase())}</span>`;
+
+function getPos() {
+  return new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res({ lat: p.coords.latitude, lng: p.coords.longitude }),
+      () => res(null), { enableHighAccuracy: true, timeout: 8000, maximumAge: 60000 });
+  });
+}
+async function resizeImg(file, max = 320) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, max / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas'); c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  return new Promise(res => c.toBlob(res, 'image/jpeg', .85));
+}
+async function uploadPhoto(file) {
+  const blob = await resizeImg(file);
+  const path = `${companyId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.jpg`;
+  const { error } = await sb.storage.from('avatars').upload(path, blob, { contentType: 'image/jpeg' });
+  if (error) throw error;
+  return sb.storage.from('avatars').getPublicUrl(path).data.publicUrl;
+}
+$('body').addEventListener('change', async e => {
+  if (e.target.id !== 'myphoto' || !e.target.files[0]) return;
+  try {
+    const url = await uploadPhoto(e.target.files[0]);
+    const r = await sb.rpc('set_my_photo', { p_url: url });
+    if (r.error) throw r.error;
+    me.photo_url = url; toast('Photo updated 📸'); load();
+  } catch (err) { fail(err); }
+});
+
+let hc = null, hcQ = '';
+async function loadHome() {
+  const [lg, st, cl] = await Promise.all([
+    sb.from('staff_logs').select('*').eq('company_id', companyId).eq('job_type', 'Home cleaning').order('clock_in_time', { ascending: false }).limit(60),
+    sb.from('staff').select('id,full_name,photo_url').eq('company_id', companyId),
+    sb.from('clients').select('id,client_name').eq('company_id', companyId)
+  ]);
+  const bad = [lg, st, cl].find(r => r.error);
+  if (bad) return fail(bad.error);
+  hc = { logs: lg.data || [], st: Object.fromEntries((st.data || []).map(x => [x.id, x])), cn: Object.fromEntries((cl.data || []).map(x => [x.id, x.client_name])) };
+  $('body').innerHTML = `<h2>🏠 Home Cleaning</h2><p class="mute" style="margin-top:0">Who’s out on jobs, and the sign-in history</p>
+    <input id="hcq" type="search" placeholder="🔍 Search by staff or client…" value="${esc(hcQ)}"><div id="hclist"></div>`;
+  renderHome();
+}
+function renderHome() {
+  const q = hcQ.toLowerCase();
+  const nm = l => (hc.st[l.staff_id] || {}).full_name || 'Staff member';
+  const cn = l => hc.cn[l.client_id] || 'No client';
+  const rows = hc.logs.filter(l => !q || (nm(l) + ' ' + cn(l)).toLowerCase().includes(q));
+  const live = rows.filter(l => l.current_status !== 'Done'), past = rows.filter(l => l.current_status === 'Done');
+  const map = l => l.latitude != null ? ` · <a href="https://www.google.com/maps?q=${l.latitude},${l.longitude}" target="_blank" rel="noopener">📍 Map</a>` : '';
+  const face = l => av(nm(l), (hc.st[l.staff_id] || {}).photo_url);
+  const card = l => `<div class="row s-${esc(String(l.current_status).replace(/\s/g, ''))}">${face(l)}
+    <div style="flex:1"><strong>${esc(nm(l))}</strong> <span class="mute">· ${esc(l.current_status)}</span><br><span class="mute">${esc(cn(l))} · since ${esc(fmt(l.clock_in_time))}${map(l)}</span></div>
+    <button class="ghost" data-co="${l.id}">Check out</button></div>`;
+  const hist = l => `<div class="row">${face(l)}<div style="flex:1"><strong>${esc(nm(l))}</strong><br>
+    <span class="mute">${esc(cn(l))} · ${esc(new Date(l.clock_in_time).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }))} · ${esc(fmt(l.clock_in_time))} – ${esc(fmt(l.clock_out_time))}${map(l)}</span></div>
+    <strong>${l.total_hours_logged != null ? esc(l.total_hours_logged) + ' h' : ''}</strong></div>`;
+  $('hclist').innerHTML = `<h2>🟢 Currently checked in (${live.length})</h2>${live.map(card).join('') || '<p class="mute">Nobody is out on a home cleaning job right now.</p>'}
+    <h2>History</h2>${past.map(hist).join('') || '<p class="mute">No history yet.</p>'}`;
+}
+$('body').addEventListener('input', e => { if (e.target.id === 'hcq') { hcQ = e.target.value; renderHome(); } });
+$('body').addEventListener('click', async e => {
+  const b = e.target.closest('[data-co]');
+  if (!b || !hc) return;
+  b.disabled = true;
+  const l = hc.logs.find(x => x.id === Number(b.dataset.co));
+  const hrs = Math.round((Date.now() - new Date(l.clock_in_time)) / 36e5 * 100) / 100;
+  const r = await sb.from('staff_logs').update({ current_status: 'Done', clock_out_time: new Date().toISOString(), total_hours_logged: hrs }).eq('id', l.id);
+  if (r.error) { b.disabled = false; return fail(r.error); }
+  toast('Checked out ✅'); loadHome();
 });
 
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });

@@ -143,10 +143,10 @@ async function showApp() {
   const { data: { user } } = await sb.auth.getUser();
   uid = user.id;
   const [co, own, mem, stf] = await Promise.all([
-    sb.from('companies').select('id,company_name,slogan').order('company_name'),
+    sb.from('companies').select('id,company_name,slogan,logo_url,phone,address,bank_details,payment_terms').order('company_name'),
     sb.rpc('is_platform_owner'),
     sb.from('memberships').select('company_id,role').eq('user_id', uid),
-    sb.from('staff').select('id,company_id,full_name,photo_url,status').eq('user_id', uid)
+    sb.from('staff').select('id,company_id,full_name,photo_url,status,days_to_pay').eq('user_id', uid)
   ]);
   if (co.error) return fail(co.error);
   companies = co.data || []; memberships = mem.data || []; staffRows = stf.data || [];
@@ -171,7 +171,7 @@ function ctx() {
   $('menu').hidden = role === 'staff';
   if (role === 'staff') $('nav').hidden = true;
   const seeMoney = isOwner || role === 'owner' || role === 'admin';
-  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['pricing', 'quotes', 'finance'].includes(k))
+  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company'].includes(k))
     .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
@@ -193,7 +193,7 @@ async function load() {
   }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : loadList(mode);
 }
 
 async function loadDash() {
@@ -215,11 +215,19 @@ async function loadDash() {
   const clients = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
   const logs = lg.data || [];
   const n = s => logs.filter(l => l.current_status === s).length;
+  let banners = '';
+  if (isOwner || role === 'owner' || role === 'admin') {
+    const [P, iv] = await Promise.all([payrollData(), sb.from('quotation_details').select('invoice_status').eq('company_id', companyId).eq('is_saved_as_invoice', true)]);
+    const due = (P.rows || []).filter(r => r.ready).length, open = (iv.data || []).filter(x => x.invoice_status !== 'Paid').length;
+    if (due) banners += `<div class="row s-Working" data-go="payroll" style="cursor:pointer">💸 ${due} staff member${due > 1 ? 's have' : ' has'} completed their work days. Payment is due ›</div>`;
+    if (open) banners += `<div class="row s-Ontheway" data-go="invoices" style="cursor:pointer">📨 ${open} invoice${open > 1 ? 's' : ''} awaiting payment ›</div>`;
+  }
   const tot = n('On the way') + n('Working') + n('Done'), pct = tot ? Math.round(n('Done') / tot * 100) : 0;
   const card = (cls, ic, num, label, go) =>
     `<div class="stat ${cls}" data-go="${go}"><div class="ic">${ICON[ic]}</div><div><b>${num}</b><span>${label} ›</span></div></div>`;
   $('body').innerHTML = `
     <h2 style="margin-top:6px">${greet()}! ${sun()}</h2>
+    ${banners}
     <div class="grid">
       ${card('blue', 'way', n('On the way'), 'On the way', 'act:On the way')}
       ${card('amber', 'work', n('Working'), 'Working now', 'act:Working')}
@@ -245,13 +253,15 @@ async function loadDash() {
 async function loadShift() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const today = new Date().toLocaleDateString('en-CA');
-  const [lg, sc, cl, pr] = await Promise.all([
+  const [lg, sc, cl, pr, mp, md] = await Promise.all([
     sb.from('staff_logs').select('*').eq('staff_id', me.id)
       .gte('clock_in_time', start.toISOString()).order('clock_in_time', { ascending: false }),
     sb.from('schedules').select('*').eq('assigned_staff_id', me.id)
       .gte('schedule_date', today).order('schedule_date').order('start_time').limit(5),
     sb.from('clients').select('id,client_name').eq('company_id', companyId),
-    sb.from('projects').select('id,project_name').eq('company_id', companyId).neq('status', 'Completed')
+    sb.from('projects').select('id,project_name').eq('company_id', companyId).neq('status', 'Completed'),
+    sb.from('payroll').select('status').eq('staff_id', me.id).eq('pay_period_start', monthInfo().startStr),
+    sb.from('staff_logs').select('clock_in_time').eq('staff_id', me.id).eq('current_status', 'Done').gte('clock_in_time', monthInfo().start.toISOString())
   ]);
   const bad = [lg, sc, cl].find(r => r.error);
   if (bad) return fail(bad.error);
@@ -262,12 +272,15 @@ async function loadShift() {
   const projSel = !openLog ? `<label>Job type<select id="sjt">${OPT.jtype.map(j => `<option>${j}</option>`).join('')}</select></label>
     <label>Client (optional)<select id="scl"><option value="">—</option>${(cl.data || []).map(c => `<option value="${c.id}">${esc(c.client_name)}</option>`).join('')}</select></label>
     ${(pr.data || []).length ? `<label>Project (optional)<select id="sproj"><option value="">—</option>${pr.data.map(x => `<option value="${x.id}">${esc(x.project_name)}</option>`).join('')}</select></label>` : ''}` : '';
+  const paidNow = (mp.data || []).some(x => x.status === 'Paid'), mdays = workDays(md.data || []);
+  const banner = paidNow ? '<div class="row s-Done">🎉 Month completed! Your payment has been made.</div>'
+    : me.days_to_pay ? `<div class="row s-Ontheway">📅 ${mdays} / ${me.days_to_pay} work days this month</div>` : '';
   let btn;
   if (!openLog) btn = '<button class="big b-blue" data-act="travel">🚗 I’m on the way</button><button class="big ghost" data-act="direct">🧽 Start work now</button>';
   else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">🧽 Start working</button>';
   else btn = '<button class="big b-green" data-act="finish">✅ Mark done</button>';
   $('body').innerHTML = `
-    <div style="display:flex;align-items:center;gap:12px;margin-top:18px">${av(me.full_name, me.photo_url, 56)}<div><h2 style="margin:0">${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2><label class="chip" style="cursor:pointer;margin:6px 0 0">📷 Change photo<input id="myphoto" type="file" accept="image/*" hidden></label></div></div>
+    ${banner}<div style="display:flex;align-items:center;gap:12px;margin-top:18px">${av(me.full_name, me.photo_url, 56)}<div><h2 style="margin:0">${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2><label class="chip" style="cursor:pointer;margin:6px 0 0">📷 Change photo<input id="myphoto" type="file" accept="image/*" hidden></label></div></div>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
     ${projSel}${btn}
     <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
@@ -316,16 +329,21 @@ const OPT = {
   jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
 const MENU = [['dash', '📊 Dashboard'], ['home', '🏠 Home Cleaning'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
-  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['finance', '💳 Finances']];
+  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['company', '🏢 Company']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const ENT = {
+  company: { table: 'companies', label: 'company profile', title: 'Company', photoCol: 'logo_url',
+    fields: [['photo', 'Company logo', 'photo'], ['company_name', 'Company name', 'text', 1], ['slogan', 'Slogan', 'text'], ['phone', 'Phone', 'tel'],
+             ['address', 'Address', 'text'], ['payment_terms', 'Payment terms (shown on invoices)', 'text'], ['bank_details', 'Bank details (shown on invoices)', 'text']] },
   clients: { table: 'clients', label: 'client', title: 'Clients', order: ['client_name', true],
     fields: [['client_name', 'Name', 'text', 1], ['address', 'Address', 'text'], ['preferred_cleaning_days', 'Preferred cleaning days', 'text']],
     line: r => [r.client_name, r.address || ''] },
   staff: { table: 'staff', label: 'staff member', title: 'Staff', order: ['full_name', true],
     fields: [['photo', 'Profile photo', 'photo'], ['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'],
-             ['shift_hours', 'Shift hours', 'text'], ['status', 'Status', 'pick:sstatus', 0, 'Active']],
+             ['shift_hours', 'Shift hours', 'text'],
+             ['days_to_pay', 'Work days needed for payment (per month)', 'number'], ['pay_amount', 'Payment amount (₦)', 'number'],
+             ['status', 'Status', 'pick:sstatus', 0, 'Active']],
     line: r => [r.full_name, [r.role, r.phone_number].filter(Boolean).join(' · ')],
     avatar: r => av(r.full_name, r.photo_url),
     badge: r => r.status === 'Terminated' ? '⛔ Terminated' : '🟢 Active' },
@@ -444,6 +462,7 @@ $('body').addEventListener('click', e => {
   if (t.dataset.cancel) { editing = false; load(); }
   else if (t.dataset.add) openForm(t.dataset.add, null);
   else if (mode === 'clients') showClient(rowsCache[Number(t.dataset.edit)]);
+  else if (mode === 'staff') showStaff(rowsCache[Number(t.dataset.edit)]);
   else openForm(mode, rowsCache[Number(t.dataset.edit)]);
 });
 
@@ -459,7 +478,7 @@ $('body').addEventListener('submit', async e => {
   });
   if (E.compute) E.compute(d);
   const file = f.elements.photo && f.elements.photo.files[0];
-  if (file) { try { d.photo_url = await uploadPhoto(file); } catch (err) { $('fmsg').textContent = 'Photo upload failed: ' + (err.message || err); return; } }
+  if (file) { try { d[E.photoCol || 'photo_url'] = await uploadPhoto(file); } catch (err) { $('fmsg').textContent = 'Photo upload failed: ' + (err.message || err); return; } }
   const { error } = id
     ? await sb.from(E.table).update(d).eq('id', Number(id))
     : await sb.from(E.table).insert({ ...d, company_id: companyId });
@@ -468,6 +487,7 @@ $('body').addEventListener('submit', async e => {
       ? 'You do not have permission to do this.' : 'Could not save: ' + error.message;
     return;
   }
+  if (kind === 'company') { companies = companies.map(c => c.id === Number(id) ? { ...c, ...d } : c); toast('Saved ✅'); }
   editing = false; load();
 });
 
@@ -496,11 +516,11 @@ function spread(items, target) {
   return amts;
 }
 
-async function loadPricing() {
+async function loadPricing(inv = false) {
   editing = true;
-  const c = await sb.from('clients').select('id,client_name').eq('company_id', companyId).order('client_name');
+  const c = await sb.from('clients').select('id,client_name,address').eq('company_id', companyId).order('client_name');
   pick.clients = c.data || [];
-  qs = { type: 'Post-Construction', step: 1, costs: {}, mode: '%', profit: '', client: '', items: [] };
+  qs = { type: 'Post-Construction', step: 1, costs: {}, mode: '%', profit: '', client: '', items: [], inv };
   renderCosts();
 }
 
@@ -527,7 +547,7 @@ function updBreak() {
 function renderQuote() {
   qs.target = qTotals().total;
   $('body').innerHTML = `<div class="head"><button class="ghost" id="pback">← Edit costs</button><span class="mute">Target total<br><strong style="font-size:1.4rem;color:var(--text)">${ngn(qs.target)}</strong></span></div>
-    <h2>${esc(qs.type)} quotation</h2>
+    <h2>${esc(qs.type)} ${qs.inv ? 'invoice' : 'quotation'}</h2>
     <label>Client name<input id="qcl" list="cls" value="${esc(qs.client)}" placeholder="Type or select a client"></label>
     <datalist id="cls">${pick.clients.map(c => `<option value="${esc(c.client_name)}">`).join('')}</datalist>
     <h2>Line items (client-facing)</h2><p class="mute">Qty = how many (floors, windows…). Condition = debris level: L low, M medium, H high. Amounts auto-spread to match the target total.</p>
@@ -536,7 +556,7 @@ function renderQuote() {
       <div style="display:flex;gap:6px;align-items:center">${['L', 'M', 'H'].map(l => `<button class="ghost" data-lv="${i},${l}" style="${it.level === l ? 'background:#2563eb;color:#fff' : ''}">${l}</button>`).join('')}<strong id="am${i}" style="margin-left:auto"></strong><button class="ghost" data-del="${i}">✕</button></div></div>`).join('')}
     <button class="ghost" data-addline="1">+ Add line item</button>
     <div class="row"><strong>Total</strong><strong style="font-size:1.4rem">${ngn(qs.target)}</strong></div>
-    <button class="big b-green" id="pgen">Generate Quotation</button><p class="msg" id="fmsg"></p>`;
+    <button class="big b-green" id="pgen">${qs.inv ? 'Generate Invoice' : 'Generate Quotation'}</button><p class="msg" id="fmsg"></p>`;
   updAmts();
 }
 function updAmts() { spread(qs.items, qs.target).forEach((a, i) => { const el = $('am' + i); if (el) el.textContent = ngn(a); }); }
@@ -559,10 +579,10 @@ async function genQuote(btn) {
     ...Object.fromEntries(COSTS.map(k => [k, Number(qs.costs[k]) || 0])), profit_margin: pct, final_price: t.total })
     .select('id,created_at').single();
   if (q.error) return qErr(q.error, btn);
-  const d = await sb.from('quotation_details').insert({ company_id: companyId, pricing_quotation_id: q.data.id, client_id: cl.id, line_items: items }).select('id').single();
+  const d = await sb.from('quotation_details').insert({ company_id: companyId, pricing_quotation_id: q.data.id, client_id: cl.id, line_items: items, ...(qs.inv ? { is_saved_as_invoice: true, invoice_status: 'Unpaid' } : {}) }).select('id').single();
   if (d.error) return qErr(d.error, btn);
   confetti(); toast('Quotation ready! ✨');
-  showQuote({ id: q.data.id, detailId: d.data.id, clientId: cl.id, client: cl.client_name, type: TYPE_FULL[qs.type], total: t.total, date: q.data.created_at, items });
+  showQuote({ id: q.data.id, detailId: d.data.id, clientId: cl.id, client: cl.client_name, type: TYPE_FULL[qs.type], total: t.total, date: q.data.created_at, items, address: cl.address, invoice: !!qs.inv, istatus: qs.inv ? 'Unpaid' : null });
 }
 
 const TYPE_FULL = { 'Post-Construction': 'Post-Construction Cleaning', 'Home Cleaning': 'Home Cleaning' };
@@ -571,51 +591,78 @@ let curQ = null;
 
 function showQuote(q) {
   editing = true; qs = null; curQ = q;
-  const co = (companies.find(c => c.id === companyId) || {}).company_name || '';
-  const kind = q.invoice ? 'Invoice' : 'Quotation';
+  const co = companies.find(c => c.id === companyId) || {};
+  const kind = q.invoice ? 'Invoice' : 'Quotation', st = q.istatus;
   const num = (q.invoice ? 'INV-' : 'QT-') + String(q.id).padStart(4, '0');
+  const dt = new Date(q.date), until = new Date(dt.getTime() + 30 * 864e5);
+  const day = x => x.toLocaleDateString('en-GB');
+  const stat = st === 'Paid' ? '✅ Paid' : st === 'Sent' ? '📨 Sent' : '⏳ Unpaid';
   $('body').innerHTML = `<h2>Client ${kind}</h2>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
       <button class="ghost" id="qpdf">⬇ Download PDF</button>
       ${q.invoice ? '' : '<button class="ghost" id="qinv" style="background:linear-gradient(90deg,#16a34a,#2563eb);color:#fff;border:0">Convert to Invoice</button>'}
+      ${q.invoice && st === 'Unpaid' ? '<button class="ghost" id="qsent">📨 Mark as sent</button>' : ''}
+      ${q.invoice && st !== 'Paid' ? '<select id="paym" style="width:auto"><option>Bank transfer</option><option>Cash</option><option>POS</option><option>Other</option></select><button class="ghost" id="qpaid" style="background:#16a34a;color:#fff;border:0">✅ Mark as paid</button>' : ''}
       <button class="ghost" id="qnew">+ New</button></div>
     <div id="qdoc" class="row" style="display:block;padding:20px">
-      <h2 style="margin:0">${esc(co)}</h2><p class="mute" style="margin:4px 0 14px">${esc(q.type || '')}</p>
-      <p class="mute" style="margin:0">${kind} #${num}<br>${esc(new Date(q.date).toLocaleDateString('en-GB'))}</p>
+      <div style="display:flex;gap:12px;align-items:center">${co.logo_url ? `<img src="${esc(co.logo_url)}" alt="" style="width:56px;height:56px;border-radius:12px;object-fit:cover">` : ''}
+        <div><h2 style="margin:0">${esc(co.company_name || '')}</h2><span class="mute">${esc(co.slogan || '')}</span></div></div>
+      <p class="mute" style="margin:10px 0 0">${esc([co.address, co.phone].filter(Boolean).join(' · '))}</p>
+      <p class="mute" style="margin:12px 0 0">${esc(q.type || '')}</p>
+      <p class="mute" style="margin:4px 0 0">${kind} #${num} · ${esc(day(dt))} · ${q.invoice ? stat : 'Valid until ' + esc(day(until))}</p>
       <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
-      <p class="mute" style="margin:0 0 12px">Prepared for: <strong style="color:var(--text)">${esc(q.client)}</strong></p>
+      <p class="mute" style="margin:0 0 12px">Prepared for: <strong style="color:var(--text)">${esc(q.client)}</strong>${q.address ? '<br>' + esc(q.address) : ''}</p>
       <div class="qt h"><span>Item</span><span>Qty</span><span>Condition</span><span>Amount</span></div>
       ${(q.items || []).map(i => `<div class="qt"><span>${esc(i.name)}</span><span>${esc(i.qty)}</span><span>${esc(COND[i.level] || '')}</span><span>${ngn(i.amount)}</span></div>`).join('')}
       <div class="qt"><span></span><span></span><strong>Total</strong><strong>${ngn(q.total)}</strong></div>
-      <p class="mute" style="margin:16px 0 0;font-size:.85rem">${q.invoice ? '' : 'This quotation is valid for 30 days from the date above. '}Thank you for choosing ${esc(co)}.</p></div>`;
+      ${q.invoice && st !== 'Paid' && co.bank_details ? `<p style="margin:16px 0 0;white-space:pre-line"><strong>Pay to:</strong> ${esc(co.bank_details)}</p>` : ''}
+      ${co.payment_terms ? `<p class="mute" style="margin:10px 0 0;font-size:.85rem">${esc(co.payment_terms)}</p>` : ''}
+      <p class="mute" style="margin:12px 0 0;font-size:.85rem">${q.invoice ? '' : 'This quotation is valid for 30 days from the date above. '}Thank you for choosing ${esc(co.company_name || '')}.</p></div>`;
+}
+
+async function setInvoice(btn, status) {
+  btn.disabled = true;
+  const q = curQ, num = 'INV-' + String(q.id).padStart(4, '0');
+  if (status === 'Paid') {
+    if (q.istatus === 'Paid') return;
+    const f = await sb.from('financials').insert({ company_id: companyId, transaction_type: 'Payment', amount: q.total,
+      description: `${num} · ${q.client}`, payment_method: ($('paym') || {}).value || 'Bank transfer', transaction_date: new Date().toLocaleDateString('en-CA') });
+    if (f.error) { btn.disabled = false; return fail(f.error); }
+  }
+  const u = await sb.from('quotation_details').update({ invoice_status: status, ...(status === 'Paid' ? { paid_on: new Date().toISOString() } : {}) }).eq('id', q.detailId);
+  if (u.error) { btn.disabled = false; return fail(u.error); }
+  q.istatus = status;
+  if (status === 'Paid') { confetti(); toast('Payment recorded in Finances 💰'); } else toast('Marked as sent 📨');
+  showQuote(q);
 }
 
 async function toInvoice(btn) {
   btn.disabled = true;
   const q = curQ;
-  const r = await sb.from('quotation_details').update({ is_saved_as_invoice: true }).eq('id', q.detailId);
+  const r = await sb.from('quotation_details').update({ is_saved_as_invoice: true, invoice_status: 'Unpaid' }).eq('id', q.detailId);
   if (r.error) { btn.disabled = false; return fail(r.error); }
   const c = await sb.from('clients').select('total_invoices_issued').eq('id', q.clientId).single();
   if (!c.error) await sb.from('clients').update({ total_invoices_issued: (c.data.total_invoices_issued || 0) + 1 }).eq('id', q.clientId);
-  q.invoice = true; showQuote(q);
+  q.invoice = true; q.istatus = 'Unpaid'; showQuote(q);
 }
 
-async function loadQuotes() {
+async function loadQuotes(inv = false) {
   const [q, d, cl] = await Promise.all([
     sb.from('pricing_quotations').select('id,client_id,cleaning_type,final_price,created_at').eq('company_id', companyId).order('created_at', { ascending: false }),
-    sb.from('quotation_details').select('id,pricing_quotation_id,line_items,is_saved_as_invoice,pdf_download_count').eq('company_id', companyId),
-    sb.from('clients').select('id,client_name').eq('company_id', companyId)
+    sb.from('quotation_details').select('id,pricing_quotation_id,line_items,is_saved_as_invoice,pdf_download_count,invoice_status,paid_on').eq('company_id', companyId),
+    sb.from('clients').select('id,client_name,address').eq('company_id', companyId)
   ]);
   const bad = [q, d, cl].find(r => r.error);
   if (bad) return fail(bad.error);
   const cn = Object.fromEntries((cl.data || []).map(c => [c.id, c.client_name]));
   rowsCache = (q.data || []).map(r => {
     const x = (d.data || []).find(y => y.pricing_quotation_id === r.id) || {};
-    return { id: r.id, detailId: x.id, clientId: r.client_id, client: cn[r.client_id] || 'Client', type: r.cleaning_type, total: r.final_price,
+    return { address: ((cl.data || []).find(c => c.id === r.client_id) || {}).address, istatus: x.invoice_status || (x.is_saved_as_invoice ? 'Unpaid' : null), id: r.id, detailId: x.id, clientId: r.client_id, client: cn[r.client_id] || 'Client', type: r.cleaning_type, total: r.final_price,
       date: r.created_at, items: x.line_items || [], invoice: !!x.is_saved_as_invoice, pdf: x.pdf_download_count || 0 };
   });
-  $('body').innerHTML = `<h2>Quotations</h2>` + (rowsCache.length ? rowsCache.map((r, i) => `
-    <div class="row tap" data-q="${i}"><div><strong>${esc(r.client)}</strong><br><span class="mute">${esc(r.type || '')} · ${esc(new Date(r.date).toLocaleDateString('en-GB'))}${r.invoice ? ' · Invoice' : ''}</span></div><strong>${ngn(r.total)}</strong></div>`).join('')
+  const stat = r => r.istatus === 'Paid' ? '✅ Paid' : r.istatus === 'Sent' ? '📨 Sent' : '⏳ Unpaid';
+  $('body').innerHTML = `<div class="head"><h2>${inv ? 'Invoices' : 'Quotations'}</h2>${inv ? '<button class="ghost" data-newinv="1">+ New invoice</button>' : ''}</div>` + (rowsCache.length ? rowsCache.map((r, i) => inv && !r.invoice ? '' : `
+    <div class="row tap" data-q="${i}"><div><strong>${esc(r.client)}</strong><br><span class="mute">${esc(r.type || '')} · ${esc(new Date(r.date).toLocaleDateString('en-GB'))}${r.invoice ? ' · ' + stat(r) : ''}</span></div><strong>${ngn(r.total)}</strong></div>`).join('')
     : '<p class="mute">No quotations yet. Create one from Pricing.</p>');
 }
 
@@ -628,10 +675,13 @@ $('body').addEventListener('input', e => {
 });
 
 $('body').addEventListener('click', e => {
-  const t = e.target.closest('[data-ptype],[data-pmode],[data-lv],[data-del],[data-addline],[data-q],#pgo,#pback,#pgen,#qpdf,#qinv,#qnew');
+  const t = e.target.closest('[data-ptype],[data-pmode],[data-lv],[data-del],[data-addline],[data-q],[data-newinv],#pgo,#pback,#pgen,#qpdf,#qinv,#qnew,#qsent,#qpaid');
   if (!t) return;
   const d = t.dataset;
   if (d.q !== undefined) return showQuote(rowsCache[+d.q]);
+  if (d.newinv) return loadPricing(true);
+  if (t.id === 'qsent') return setInvoice(t, 'Sent');
+  if (t.id === 'qpaid') return setInvoice(t, 'Paid');
   if (t.id === 'qnew') return loadPricing();
   if (t.id === 'qinv') return toInvoice(t);
   if (t.id === 'qpdf') {
@@ -684,7 +734,7 @@ document.querySelectorAll('.themebtn').forEach(b => b.addEventListener('click', 
   applyTheme(t);
 }));
 // ---- Dashboard drill-down, client profile, finance filter ----
-let actFilter = 'Working', finFilter = 'all', curClient = null;
+let actFilter = 'Working', finFilter = 'all', curClient = null, curStaff = null, PAY = null;
 
 async function loadActivity() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -711,11 +761,12 @@ async function showClient(c) {
   editing = true; curClient = c;
   const [q, d, sc, st] = await Promise.all([
     sb.from('pricing_quotations').select('id,final_price,created_at,cleaning_type').eq('company_id', companyId).eq('client_id', c.id).order('created_at', { ascending: false }),
-    sb.from('quotation_details').select('pricing_quotation_id,is_saved_as_invoice').eq('company_id', companyId).eq('client_id', c.id),
+    sb.from('quotation_details').select('pricing_quotation_id,is_saved_as_invoice,invoice_status').eq('company_id', companyId).eq('client_id', c.id),
     sb.from('schedules').select('assigned_staff_id').eq('company_id', companyId).eq('client_id', c.id),
     sb.from('staff').select('id,full_name').eq('company_id', companyId)
   ]);
-  const inv = (d.data || []).filter(x => x.is_saved_as_invoice).map(x => (q.data || []).find(y => y.id === x.pricing_quotation_id)).filter(Boolean);
+  const inv = (d.data || []).filter(x => x.is_saved_as_invoice).map(x => { const r = (q.data || []).find(y => y.id === x.pricing_quotation_id); return r && { ...r, st: x.invoice_status || 'Unpaid' }; }).filter(Boolean);
+  const sent = inv.filter(r => r.st === 'Sent').length;
   const sn = Object.fromEntries((st.data || []).map(x => [x.id, x.full_name]));
   const ids = [...new Set((sc.data || []).map(x => x.assigned_staff_id).filter(Boolean))];
   const total = inv.reduce((a, r) => a + Number(r.final_price || 0), 0);
@@ -723,15 +774,17 @@ async function showClient(c) {
     <h2 style="margin-bottom:2px">${esc(c.client_name)}</h2>
     <p class="mute" style="margin-top:0">${esc([c.address, c.preferred_cleaning_days].filter(Boolean).join(' · '))}</p>
     <h2>👷 Assigned staff</h2>${ids.length ? ids.map(id => `<span class="chip">${esc(sn[id] || 'Staff')}</span>`).join('') : '<p class="mute">No staff scheduled for this client yet.</p>'}
+    ${sent ? `<div class="row s-Ontheway">📨 ${sent} invoice${sent > 1 ? 's' : ''} sent to this client, awaiting payment</div>` : ''}
     <h2>🧾 Invoice history</h2><p class="mute">${inv.length} invoice${inv.length === 1 ? '' : 's'} · ${ngn(total)} total</p>
-    ${inv.map(r => `<div class="row"><div><strong>INV-${String(r.id).padStart(4, '0')}</strong><br><span class="mute">${esc(r.cleaning_type || '')} · ${esc(new Date(r.created_at).toLocaleDateString('en-GB'))}</span></div><strong>${ngn(r.final_price)}</strong></div>`).join('')}`;
+    ${inv.map(r => `<div class="row"><div><strong>INV-${String(r.id).padStart(4, '0')}</strong><br><span class="mute">${esc(r.cleaning_type || '')} · ${esc(new Date(r.created_at).toLocaleDateString('en-GB'))} · ${r.st === 'Paid' ? '✅ Paid' : r.st === 'Sent' ? '📨 Sent' : '⏳ Unpaid'}</span></div><strong>${ngn(r.final_price)}</strong></div>`).join('')}`;
 }
 
 $('body').addEventListener('click', e => {
-  const g = e.target.closest('[data-go],[data-fin],[data-cedit]');
+  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit]');
   if (!g) return;
   editing = false;
   if (g.dataset.cedit) { openForm('clients', curClient); return; }
+  if (g.dataset.sedit) { openForm('staff', curStaff); return; }
   if (g.dataset.fin) { finFilter = g.dataset.fin; load(); return; }
   const v = g.dataset.go;
   if (v.startsWith('act:')) { actFilter = v.slice(4); mode = 'activity'; } else mode = v;
@@ -816,6 +869,83 @@ $('body').addEventListener('click', async e => {
   if (r.error) { b.disabled = false; return fail(r.error); }
   toast('Checked out ✅'); loadHome();
 });
+
+// ---- Payroll, staff profile, company profile ----
+function monthInfo(d = new Date()) {
+  const a = new Date(d.getFullYear(), d.getMonth(), 1), z = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const f = x => x.toLocaleDateString('en-CA');
+  return { start: a, startStr: f(a), endStr: f(z), label: a.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) };
+}
+const workDays = logs => new Set(logs.map(l => new Date(l.clock_in_time).toLocaleDateString('en-CA'))).size;
+
+async function payrollData() {
+  const m = monthInfo();
+  const [st, lg, pay] = await Promise.all([
+    sb.from('staff').select('id,full_name,photo_url,status,days_to_pay,pay_amount').eq('company_id', companyId).order('full_name'),
+    sb.from('staff_logs').select('staff_id,clock_in_time,total_hours_logged').eq('company_id', companyId).eq('current_status', 'Done').gte('clock_in_time', m.start.toISOString()),
+    sb.from('payroll').select('*').eq('company_id', companyId).order('created_at', { ascending: false }).limit(100)
+  ]);
+  const err = [st, lg, pay].find(r => r.error);
+  if (err) return { error: err.error };
+  const rows = (st.data || []).filter(x => x.status !== 'Terminated').map(x => {
+    const mine = (lg.data || []).filter(l => l.staff_id === x.id);
+    const days = workDays(mine), need = x.days_to_pay || 0;
+    const paid = (pay.data || []).some(p => p.staff_id === x.id && p.pay_period_start === m.startStr && p.status === 'Paid');
+    return { ...x, days, need, paid, hrs: mine.reduce((a, l) => a + Number(l.total_hours_logged || 0), 0), ready: !paid && need > 0 && days >= need };
+  });
+  return { m, rows, pay: pay.data || [], names: Object.fromEntries((st.data || []).map(x => [x.id, x.full_name])) };
+}
+
+async function loadPayroll() {
+  const P = await payrollData();
+  if (P.error) return fail(P.error);
+  PAY = P;
+  const card = r => `<div class="row s-${r.paid ? 'Done' : r.ready ? 'Working' : 'Ontheway'}" style="display:block">
+    <div style="display:flex;align-items:center;gap:12px">${av(r.full_name, r.photo_url)}
+      <div style="flex:1"><strong>${esc(r.full_name)}</strong><br><span class="mute">${r.need ? `${r.days} / ${r.need} work days` : 'No work-day target set'} · ${r.pay_amount ? ngn(r.pay_amount) : 'No amount set'}</span></div>
+      <strong>${r.paid ? '💸 Paid' : r.ready ? '✅ Ready' : '⏳'}</strong></div>
+    ${r.need ? `<div class="pb" style="margin-top:10px"><i style="width:${Math.min(100, Math.round(r.days / r.need * 100))}%"></i></div>` : ''}
+    ${!r.paid && r.pay_amount ? `<button class="ghost" data-pay="${r.id}" style="margin-top:10px">Mark paid ${ngn(r.pay_amount)}</button>` : ''}</div>`;
+  $('body').innerHTML = `<h2>💸 Payroll · ${esc(P.m.label)}</h2><p class="mute" style="margin-top:0">Staff are paid once they complete their work days for the month.</p>
+    ${P.rows.map(card).join('') || '<p class="mute">No active staff yet.</p>'}
+    <h2>Payments made</h2>${P.pay.filter(p => p.status === 'Paid').map(p => `<div class="row"><div><strong>${esc(P.names[p.staff_id] || 'Staff')}</strong><br><span class="mute">${esc(p.pay_period_start)} → ${esc(p.pay_period_end)}</span></div><strong>${ngn(p.gross_pay)}</strong></div>`).join('') || '<p class="mute">No payments recorded yet.</p>'}`;
+}
+
+$('body').addEventListener('click', async e => {
+  const b = e.target.closest('[data-pay]');
+  if (!b || !PAY) return;
+  const r = PAY.rows.find(x => x.id === Number(b.dataset.pay));
+  b.disabled = true;
+  const ins = await sb.from('payroll').insert({ company_id: companyId, staff_id: r.id, pay_period_start: PAY.m.startStr, pay_period_end: PAY.m.endStr,
+    total_hours_worked: r.hrs, hourly_rate: 0, gross_pay: r.pay_amount, status: 'Paid' });
+  if (ins.error) { b.disabled = false; return fail(ins.error); }
+  const ex = await sb.from('financials').insert({ company_id: companyId, transaction_type: 'Expense', amount: r.pay_amount,
+    description: `Staff payment · ${r.full_name} · ${PAY.m.label}`, payment_method: 'Bank transfer', transaction_date: new Date().toLocaleDateString('en-CA') });
+  if (ex.error) fail(ex.error);
+  confetti(); toast('Payment recorded 💸'); loadPayroll();
+});
+
+async function showStaff(x) {
+  editing = true; curStaff = x;
+  const m = monthInfo();
+  const [pay, lg] = await Promise.all([
+    sb.from('payroll').select('*').eq('staff_id', x.id).order('created_at', { ascending: false }),
+    sb.from('staff_logs').select('clock_in_time').eq('staff_id', x.id).eq('current_status', 'Done').gte('clock_in_time', m.start.toISOString())
+  ]);
+  const paid = (pay.data || []).filter(p => p.status === 'Paid');
+  $('body').innerHTML = `<div class="head"><button class="ghost" data-go="staff">← Staff</button><button class="ghost" data-sedit="1">✏️ Edit</button></div>
+    <div style="display:flex;align-items:center;gap:14px;margin-top:12px">${av(x.full_name, x.photo_url, 64)}
+      <div><h2 style="margin:0">${esc(x.full_name)}</h2><span class="mute">${esc([x.role, x.phone_number, x.status === 'Terminated' ? '⛔ Terminated' : '🟢 Active'].filter(Boolean).join(' · '))}</span></div></div>
+    <h2>📅 ${esc(m.label)}</h2><p class="mute" style="margin-top:0">${workDays(lg.data || [])}${x.days_to_pay ? ' / ' + x.days_to_pay : ''} work days · ${x.pay_amount ? ngn(x.pay_amount) + ' per payment' : 'No payment amount set'}</p>
+    <h2>💸 Payment history</h2><p class="mute" style="margin-top:0">${paid.length} payment${paid.length === 1 ? '' : 's'} · ${ngn(paid.reduce((a, p) => a + Number(p.gross_pay || 0), 0))} total</p>
+    ${paid.map(p => `<div class="row"><span>${esc(p.pay_period_start)} → ${esc(p.pay_period_end)}</span><strong>${ngn(p.gross_pay)}</strong></div>`).join('')}`;
+}
+
+async function loadCompany() {
+  const r = await sb.from('companies').select('*').eq('id', companyId).single();
+  if (r.error) return fail(r.error);
+  openForm('company', r.data);
+}
 
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
 $('nav').addEventListener('click', e => {

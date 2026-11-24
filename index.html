@@ -93,7 +93,13 @@ a{color:#38bdf8}
     <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
     <button>Sign in</button>
   </form>
+  <form id="sf" hidden>
+    <input id="sem" type="email" placeholder="Your email" autocomplete="username" required>
+    <input id="spw" type="password" placeholder="Choose a password (8+ characters)" autocomplete="new-password" required>
+    <button>Create account</button>
+  </form>
   <p class="msg" id="lmsg"></p>
+  <p class="mute">New cleaning agency? <a href="#" id="tosignup">Create an account</a></p>
 </main>
 
 <main id="app" hidden>
@@ -143,7 +149,7 @@ async function showApp() {
   const { data: { user } } = await sb.auth.getUser();
   uid = user.id;
   const [co, own, mem, stf] = await Promise.all([
-    sb.from('companies').select('id,company_name,slogan,logo_url,phone,address,bank_details,payment_terms').order('company_name'),
+    sb.from('companies').select('id,company_name,slogan,logo_url,phone,address,bank_details,payment_terms,status').order('company_name'),
     sb.rpc('is_platform_owner'),
     sb.from('memberships').select('company_id,role').eq('user_id', uid),
     sb.from('staff').select('id,company_id,full_name,photo_url,status,days_to_pay').eq('user_id', uid)
@@ -152,11 +158,20 @@ async function showApp() {
   companies = co.data || []; memberships = mem.data || []; staffRows = stf.data || [];
   if (!companies.length) {
     $('title').textContent = 'No company yet';
-    $('body').innerHTML = '<p class="mute">Your account is not linked to a company. Ask the platform owner to add you.</p>';
+    $('menu').hidden = true;
+    $('body').innerHTML = '<p class="mute">Your account is not linked to a company yet. If you were invited, ask your manager. If you own a cleaning agency, register it below.</p><button class="big b-green" data-reg="1">🏢 Register my agency</button>';
     return;
   }
   $('co').innerHTML = companies.map(c => `<option value="${c.id}">${esc(c.company_name)}</option>`).join('');
-  isOwner = own.data === true; $('co').hidden = !isOwner;   // only the platform owner gets the switcher
+  isOwner = own.data === true; $('co').hidden = !isOwner;
+  if (!isOwner && companies.every(c => c.status && c.status !== 'active')) {
+    $('menu').hidden = true;
+    $('title').textContent = companies[0].company_name;
+    $('body').innerHTML = companies[0].status === 'rejected'
+      ? '<p class="mute">Your registration was not approved. Please contact the platform owner.</p>'
+      : '<div class="row s-Working">⏳ Your agency is waiting for approval. Reload this page once you have been approved.</div>';
+    return;
+  }   // only the platform owner gets the switcher
   companyId = companies[0].id; $('co').value = companyId;
   await load();
   clearInterval(timer); timer = setInterval(() => { if (!editing) load(); }, 30000);
@@ -171,7 +186,7 @@ function ctx() {
   $('menu').hidden = role === 'staff';
   if (role === 'staff') $('nav').hidden = true;
   const seeMoney = isOwner || role === 'owner' || role === 'admin';
-  $('nav').innerHTML = MENU.filter(([k]) => seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company'].includes(k))
+  $('nav').innerHTML = MENU.filter(([k]) => (seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company'].includes(k)) && (k !== 'approvals' || isOwner))
     .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
@@ -193,7 +208,7 @@ async function load() {
   }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : mode === 'approvals' ? loadApprovals() : loadList(mode);
 }
 
 async function loadDash() {
@@ -221,6 +236,16 @@ async function loadDash() {
     const due = (P.rows || []).filter(r => r.ready).length, open = (iv.data || []).filter(x => x.invoice_status !== 'Paid').length;
     if (due) banners += `<div class="row s-Working" data-go="payroll" style="cursor:pointer">💸 ${due} staff member${due > 1 ? 's have' : ' has'} completed their work days. Payment is due ›</div>`;
     if (open) banners += `<div class="row s-Ontheway" data-go="invoices" style="cursor:pointer">📨 ${open} invoice${open > 1 ? 's' : ''} awaiting payment ›</div>`;
+  }
+  (sc.data || []).forEach(x => {
+    if (!x.start_time || ['Completed', 'Cancelled'].includes(x.status)) return;
+    const hrs = (new Date(x.schedule_date + 'T' + x.start_time).getTime() - Date.now()) / 36e5;
+    if (hrs <= 0 || hrs > 10) return;
+    banners += `<div class="row ${hrs <= 5 ? 's-Working' : 's-Ontheway'}" data-go="schedules" style="cursor:pointer">⏰ ${esc(clients[x.client_id] || 'A client')} (${esc(x.job_type || 'job')}) starts in ${hrs < 1 ? 'under an hour' : 'about ' + Math.round(hrs) + ' h'}${x.assigned_staff_id ? '' : ' · no staff assigned!'} ›</div>`;
+  });
+  if (isOwner) {
+    const pc = await sb.from('companies').select('id', { count: 'exact', head: true }).eq('status', 'pending');
+    if (pc.count) banners += `<div class="row s-Working" data-go="approvals" style="cursor:pointer">🛂 ${pc.count} agenc${pc.count > 1 ? 'ies are' : 'y is'} waiting for approval ›</div>`;
   }
   const tot = n('On the way') + n('Working') + n('Done'), pct = tot ? Math.round(n('Done') / tot * 100) : 0;
   const card = (cls, ic, num, label, go) =>
@@ -329,7 +354,7 @@ const OPT = {
   jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
 const MENU = [['dash', '📊 Dashboard'], ['home', '🏠 Home Cleaning'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
-  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['company', '🏢 Company']];
+  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['company', '🏢 Company'], ['approvals', '🛂 Approvals']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const ENT = {
@@ -780,9 +805,11 @@ async function showClient(c) {
 }
 
 $('body').addEventListener('click', e => {
-  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit]');
+  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit],[data-reg],[data-appr]');
   if (!g) return;
   editing = false;
+  if (g.dataset.reg) { showRegister(); return; }
+  if (g.dataset.appr) { reviewCompany(g.dataset.appr); return; }
   if (g.dataset.cedit) { openForm('clients', curClient); return; }
   if (g.dataset.sedit) { openForm('staff', curStaff); return; }
   if (g.dataset.fin) { finFilter = g.dataset.fin; load(); return; }
@@ -946,6 +973,62 @@ async function loadCompany() {
   if (r.error) return fail(r.error);
   openForm('company', r.data);
 }
+
+// ---- Agency sign-up and approvals ----
+function showRegister() {
+  editing = true; $('menu').hidden = true; $('title').textContent = 'Register your agency';
+  $('body').innerHTML = `<p class="mute">Tell us about your cleaning agency. We will review it and activate your account.</p>
+    <form id="rf" onsubmit="return false"><label>Agency name *<input name="cname" required></label>
+      <label>Slogan<input name="slogan"></label><label>Logo<input name="logo" type="file" accept="image/*"></label>
+      <button class="big b-green">Submit for approval</button></form><p class="msg" id="fmsg"></p>`;
+}
+$('body').addEventListener('submit', async e => {
+  const f = e.target.closest('#rf');
+  if (!f) return;
+  e.preventDefault();
+  const r = await sb.rpc('register_company', { p_name: f.elements.cname.value, p_slogan: f.elements.slogan.value });
+  if (r.error) { $('fmsg').textContent = r.error.message; return; }
+  const file = f.elements.logo.files[0];
+  if (file) {
+    companyId = r.data;
+    try { await sb.from('companies').update({ logo_url: await uploadPhoto(file) }).eq('id', r.data); } catch (err) {}
+  }
+  editing = false; showApp();
+});
+
+async function loadApprovals() {
+  const r = await sb.from('companies').select('id,company_name,slogan,logo_url,created_at').eq('status', 'pending').order('created_at');
+  if (r.error) return fail(r.error);
+  $('body').innerHTML = `<h2>🛂 Agencies awaiting approval</h2>` + ((r.data || []).map(c => `
+    <div class="row" style="display:block"><div style="display:flex;align-items:center;gap:12px">${av(c.company_name, c.logo_url)}
+      <div style="flex:1"><strong>${esc(c.company_name)}</strong><br><span class="mute">${esc(c.slogan || '')} · ${esc(new Date(c.created_at).toLocaleDateString('en-GB'))}</span></div></div>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="ghost" data-appr="${c.id},active" style="background:#16a34a;color:#fff;border:0">✅ Approve</button>
+      <button class="ghost" data-appr="${c.id},rejected">✖ Reject</button></div></div>`).join('') || '<p class="mute">No agencies waiting. 🎉</p>');
+}
+async function reviewCompany(v) {
+  const [id, st] = v.split(',');
+  const r = await sb.rpc('review_company', { p_id: Number(id), p_status: st });
+  if (r.error) return fail(r.error);
+  companies = companies.map(c => c.id === Number(id) ? { ...c, status: st } : c);
+  toast(st === 'active' ? 'Agency approved ✅' : 'Agency rejected'); loadApprovals();
+}
+
+$('tosignup').addEventListener('click', e => {
+  e.preventDefault();
+  const show = $('sf').hidden;
+  $('sf').hidden = !show; $('lf').hidden = show; $('lmsg').textContent = '';
+  $('tosignup').textContent = show ? 'Back to sign in' : 'Create an account';
+});
+$('sf').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('lmsg').textContent = ''; $('lmsg').style.color = '';
+  const pw = $('spw').value;
+  if (pw.length < 8) { $('lmsg').textContent = 'Password must be at least 8 characters.'; return; }
+  const { data, error } = await sb.auth.signUp({ email: $('sem').value.trim(), password: pw });
+  if (error) { $('lmsg').textContent = error.message; return; }
+  if (data.session) { $('spw').value = ''; showApp(); }
+  else { $('lmsg').style.color = '#22c55e'; $('lmsg').textContent = 'Account created. Check your email to confirm it, then sign in.'; }
+});
 
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
 $('nav').addEventListener('click', e => {

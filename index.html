@@ -81,6 +81,8 @@ h1{background:linear-gradient(90deg,#16a34a,#2563eb);-webkit-background-clip:tex
 .chip{display:inline-block;padding:6px 12px;border-radius:99px;background:var(--line);margin:0 6px 6px 0;font-size:.9rem}
 .av{border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#22c55e,#38bdf8);color:#fff;font-weight:700;flex:none;overflow:hidden}
 a{color:#38bdf8}
+.qt.c3{grid-template-columns:1fr 34px 100px}
+details{margin:8px 0}summary{cursor:pointer;font-weight:700}details p{margin:6px 0}
 </style>
 </head>
 <body>
@@ -157,9 +159,16 @@ async function showApp() {
   if (co.error) return fail(co.error);
   companies = co.data || []; memberships = mem.data || []; staffRows = stf.data || [];
   if (!companies.length) {
-    $('title').textContent = 'No company yet';
+    $('title').textContent = 'Welcome';
     $('menu').hidden = true;
-    $('body').innerHTML = '<p class="mute">Your account is not linked to a company yet. If you were invited, ask your manager. If you own a cleaning agency, register it below.</p><button class="big b-green" data-reg="1">🏢 Register my agency</button>';
+    const jr = await sb.from('join_requests').select('status').eq('user_id', uid).order('created_at', { ascending: false }).limit(1);
+    const last = (jr.data || [])[0];
+    $('body').innerHTML = last && last.status === 'pending'
+      ? '<div class="row s-Working">⏳ Your request was sent. Your manager needs to approve it. Reload this page after they do.</div>'
+      : `<p class="mute">Your account is not linked to a company yet.</p>
+        <button class="big b-green" data-reg="1">🏢 I own a cleaning agency: register it</button>
+        <button class="big ghost" style="width:100%" data-join="1">🔑 I’m staff: join with my agency’s code</button>
+        ${last && last.status === 'rejected' ? '<p class="msg">Your last request was not approved.</p>' : ''}`;
     return;
   }
   $('co').innerHTML = companies.map(c => `<option value="${c.id}">${esc(c.company_name)}</option>`).join('');
@@ -186,7 +195,7 @@ function ctx() {
   $('menu').hidden = role === 'staff';
   if (role === 'staff') $('nav').hidden = true;
   const seeMoney = isOwner || role === 'owner' || role === 'admin';
-  $('nav').innerHTML = MENU.filter(([k]) => (seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company'].includes(k)) && (k !== 'approvals' || isOwner))
+  $('nav').innerHTML = MENU.filter(([k]) => (seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company', 'joins'].includes(k)) && (k !== 'approvals' || isOwner))
     .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
@@ -208,7 +217,7 @@ async function load() {
   }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : mode === 'approvals' ? loadApprovals() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : mode === 'approvals' ? loadApprovals() : mode === 'joins' ? loadJoins() : mode === 'findetail' ? loadFinDetail() : loadList(mode);
 }
 
 async function loadDash() {
@@ -236,6 +245,8 @@ async function loadDash() {
     const due = (P.rows || []).filter(r => r.ready).length, open = (iv.data || []).filter(x => x.invoice_status !== 'Paid').length;
     if (due) banners += `<div class="row s-Working" data-go="payroll" style="cursor:pointer">💸 ${due} staff member${due > 1 ? 's have' : ' has'} completed their work days. Payment is due ›</div>`;
     if (open) banners += `<div class="row s-Ontheway" data-go="invoices" style="cursor:pointer">📨 ${open} invoice${open > 1 ? 's' : ''} awaiting payment ›</div>`;
+    const jc = await sb.from('join_requests').select('id', { count: 'exact', head: true }).eq('company_id', companyId).eq('status', 'pending');
+    if (jc.count) banners += `<div class="row s-Working" data-go="joins" style="cursor:pointer">🙋 ${jc.count} staff request${jc.count > 1 ? 's are' : ' is'} waiting for your approval ›</div>`;
   }
   (sc.data || []).forEach(x => {
     if (!x.start_time || ['Completed', 'Cancelled'].includes(x.status)) return;
@@ -354,7 +365,7 @@ const OPT = {
   jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
 const MENU = [['dash', '📊 Dashboard'], ['home', '🏠 Home Cleaning'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
-  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['company', '🏢 Company'], ['approvals', '🛂 Approvals']];
+  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['joins', '🙋 Join requests'], ['company', '🏢 Company'], ['approvals', '🛂 Approvals']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const ENT = {
@@ -362,8 +373,9 @@ const ENT = {
     fields: [['photo', 'Company logo', 'photo'], ['company_name', 'Company name', 'text', 1], ['slogan', 'Slogan', 'text'], ['phone', 'Phone', 'tel'],
              ['address', 'Address', 'text'], ['payment_terms', 'Payment terms (shown on invoices)', 'text'], ['bank_details', 'Bank details (shown on invoices)', 'text']] },
   clients: { table: 'clients', label: 'client', title: 'Clients', order: ['client_name', true],
-    fields: [['client_name', 'Name', 'text', 1], ['address', 'Address', 'text'], ['preferred_cleaning_days', 'Preferred cleaning days', 'text']],
-    line: r => [r.client_name, r.address || ''] },
+    fields: [['client_name', 'Name', 'text', 1], ['address', 'Address', 'text'], ['assigned_staff_id', 'Assigned staff (optional)', 'pick:staff'],
+             ['preferred_cleaning_days', 'Preferred cleaning days', 'text']],
+    line: (r, L) => [r.client_name, [r.address, L.sn[r.assigned_staff_id] ? '👷 ' + L.sn[r.assigned_staff_id] : ''].filter(Boolean).join(' · ')] },
   staff: { table: 'staff', label: 'staff member', title: 'Staff', order: ['full_name', true],
     fields: [['photo', 'Profile photo', 'photo'], ['full_name', 'Full name', 'text', 1], ['role', 'Role', 'text'], ['phone_number', 'Phone', 'tel'],
              ['shift_hours', 'Shift hours', 'text'],
@@ -397,8 +409,8 @@ const ENT = {
     summary: rows => {
       const s = t => rows.filter(r => r.transaction_type === t).reduce((a, r) => a + Number(r.amount || 0), 0);
       const p = s('Payment'), x = s('Expense');
-      return `<div class="grid"><div class="stat green" data-fin="Payment"><div><b>${fm(p)}</b><span>Payments ›</span></div></div>
-        <div class="stat red" data-fin="Expense"><div><b>${fm(x)}</b><span>Expenses ›</span></div></div></div><p class="mute">Balance: ${fm(p - x)} ${finFilter !== 'all' ? `· Showing ${finFilter}s <button class="ghost" data-fin="all" style="padding:4px 10px">Show all</button>` : ''}</p>`;
+      return `<div class="grid"><div class="stat green" data-fin="Payment"><div><b>${fm(p)}</b><span>Payments · tap to open ›</span></div></div>
+        <div class="stat red" data-fin="Expense"><div><b>${fm(x)}</b><span>Expenses · tap to open ›</span></div></div></div><p class="mute">Balance: ${fm(p - x)} ${finFilter !== 'all' ? `· Showing ${finFilter}s <button class="ghost" data-fin="all" style="padding:4px 10px">Show all</button>` : ''}</p>`;
     } }
 };
 
@@ -488,7 +500,7 @@ $('body').addEventListener('click', e => {
   else if (t.dataset.add) openForm(t.dataset.add, null);
   else if (mode === 'clients') showClient(rowsCache[Number(t.dataset.edit)]);
   else if (mode === 'staff') showStaff(rowsCache[Number(t.dataset.edit)]);
-  else openForm(mode, rowsCache[Number(t.dataset.edit)]);
+  else openForm(mode === 'findetail' ? 'finance' : mode, rowsCache[Number(t.dataset.edit)]);
 });
 
 $('body').addEventListener('submit', async e => {
@@ -622,6 +634,7 @@ function showQuote(q) {
   const dt = new Date(q.date), until = new Date(dt.getTime() + 30 * 864e5);
   const day = x => x.toLocaleDateString('en-GB');
   const stat = st === 'Paid' ? '✅ Paid' : st === 'Sent' ? '📨 Sent' : '⏳ Unpaid';
+  const hasLv = (q.items || []).some(i => i.level), c3 = hasLv ? '' : ' c3';
   $('body').innerHTML = `<h2>Client ${kind}</h2>
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px;align-items:center">
       <button class="ghost" id="qpdf">⬇ Download PDF</button>
@@ -634,12 +647,13 @@ function showQuote(q) {
         <div><h2 style="margin:0">${esc(co.company_name || '')}</h2><span class="mute">${esc(co.slogan || '')}</span></div></div>
       <p class="mute" style="margin:10px 0 0">${esc([co.address, co.phone].filter(Boolean).join(' · '))}</p>
       <p class="mute" style="margin:12px 0 0">${esc(q.type || '')}</p>
-      <p class="mute" style="margin:4px 0 0">${kind} #${num} · ${esc(day(dt))} · ${q.invoice ? stat : 'Valid until ' + esc(day(until))}</p>
+      <p class="mute" style="margin:4px 0 0">${kind} #${num} · ${esc(day(dt))} · ${q.invoice ? stat : 'Valid until ' + esc(day(until))}${q.invoice && q.due ? ' · Due ' + esc(day(new Date(q.due))) : ''}</p>
       <hr style="border:0;border-top:1px solid var(--line);margin:14px 0">
       <p class="mute" style="margin:0 0 12px">Prepared for: <strong style="color:var(--text)">${esc(q.client)}</strong>${q.address ? '<br>' + esc(q.address) : ''}</p>
-      <div class="qt h"><span>Item</span><span>Qty</span><span>Condition</span><span>Amount</span></div>
-      ${(q.items || []).map(i => `<div class="qt"><span>${esc(i.name)}</span><span>${esc(i.qty)}</span><span>${esc(COND[i.level] || '')}</span><span>${ngn(i.amount)}</span></div>`).join('')}
-      <div class="qt"><span></span><span></span><strong>Total</strong><strong>${ngn(q.total)}</strong></div>
+      <div class="qt h${c3}"><span>Item</span><span>Qty</span>${hasLv ? '<span>Condition</span>' : ''}<span>Amount</span></div>
+      ${(q.items || []).map(i => `<div class="qt${c3}"><span>${esc(i.name)}</span><span>${esc(i.qty)}</span>${hasLv ? `<span>${esc(COND[i.level] || '')}</span>` : ''}<span>${ngn(i.amount)}</span></div>`).join('')}
+      <div class="qt${c3}">${hasLv ? '<span></span><span></span><strong>Total</strong>' : '<strong>Total</strong><span></span>'}<strong>${ngn(q.total)}</strong></div>
+      ${q.notes ? `<p style="margin:12px 0 0">${esc(q.notes)}</p>` : ''}
       ${q.invoice && st !== 'Paid' && co.bank_details ? `<p style="margin:16px 0 0;white-space:pre-line"><strong>Pay to:</strong> ${esc(co.bank_details)}</p>` : ''}
       ${co.payment_terms ? `<p class="mute" style="margin:10px 0 0;font-size:.85rem">${esc(co.payment_terms)}</p>` : ''}
       <p class="mute" style="margin:12px 0 0;font-size:.85rem">${q.invoice ? '' : 'This quotation is valid for 30 days from the date above. '}Thank you for choosing ${esc(co.company_name || '')}.</p></div>`;
@@ -674,7 +688,7 @@ async function toInvoice(btn) {
 async function loadQuotes(inv = false) {
   const [q, d, cl] = await Promise.all([
     sb.from('pricing_quotations').select('id,client_id,cleaning_type,final_price,created_at').eq('company_id', companyId).order('created_at', { ascending: false }),
-    sb.from('quotation_details').select('id,pricing_quotation_id,line_items,is_saved_as_invoice,pdf_download_count,invoice_status,paid_on').eq('company_id', companyId),
+    sb.from('quotation_details').select('id,pricing_quotation_id,line_items,is_saved_as_invoice,pdf_download_count,invoice_status,paid_on,due_date,notes').eq('company_id', companyId),
     sb.from('clients').select('id,client_name,address').eq('company_id', companyId)
   ]);
   const bad = [q, d, cl].find(r => r.error);
@@ -683,7 +697,7 @@ async function loadQuotes(inv = false) {
   rowsCache = (q.data || []).map(r => {
     const x = (d.data || []).find(y => y.pricing_quotation_id === r.id) || {};
     return { address: ((cl.data || []).find(c => c.id === r.client_id) || {}).address, istatus: x.invoice_status || (x.is_saved_as_invoice ? 'Unpaid' : null), id: r.id, detailId: x.id, clientId: r.client_id, client: cn[r.client_id] || 'Client', type: r.cleaning_type, total: r.final_price,
-      date: r.created_at, items: x.line_items || [], invoice: !!x.is_saved_as_invoice, pdf: x.pdf_download_count || 0 };
+      date: r.created_at, due: x.due_date, notes: x.notes, items: x.line_items || [], invoice: !!x.is_saved_as_invoice, pdf: x.pdf_download_count || 0 };
   });
   const stat = r => r.istatus === 'Paid' ? '✅ Paid' : r.istatus === 'Sent' ? '📨 Sent' : '⏳ Unpaid';
   $('body').innerHTML = `<div class="head"><h2>${inv ? 'Invoices' : 'Quotations'}</h2>${inv ? '<button class="ghost" data-newinv="1">+ New invoice</button>' : ''}</div>` + (rowsCache.length ? rowsCache.map((r, i) => inv && !r.invoice ? '' : `
@@ -704,7 +718,7 @@ $('body').addEventListener('click', e => {
   if (!t) return;
   const d = t.dataset;
   if (d.q !== undefined) return showQuote(rowsCache[+d.q]);
-  if (d.newinv) return loadPricing(true);
+  if (d.newinv) return loadInvoiceForm();
   if (t.id === 'qsent') return setInvoice(t, 'Sent');
   if (t.id === 'qpaid') return setInvoice(t, 'Paid');
   if (t.id === 'qnew') return loadPricing();
@@ -759,7 +773,7 @@ document.querySelectorAll('.themebtn').forEach(b => b.addEventListener('click', 
   applyTheme(t);
 }));
 // ---- Dashboard drill-down, client profile, finance filter ----
-let actFilter = 'Working', finFilter = 'all', curClient = null, curStaff = null, PAY = null;
+let actFilter = 'Working', finFilter = 'all', finType = 'Payment', finMonth = 'month', curClient = null, curStaff = null, PAY = null;
 
 async function loadActivity() {
   const start = new Date(); start.setHours(0, 0, 0, 0);
@@ -793,7 +807,7 @@ async function showClient(c) {
   const inv = (d.data || []).filter(x => x.is_saved_as_invoice).map(x => { const r = (q.data || []).find(y => y.id === x.pricing_quotation_id); return r && { ...r, st: x.invoice_status || 'Unpaid' }; }).filter(Boolean);
   const sent = inv.filter(r => r.st === 'Sent').length;
   const sn = Object.fromEntries((st.data || []).map(x => [x.id, x.full_name]));
-  const ids = [...new Set((sc.data || []).map(x => x.assigned_staff_id).filter(Boolean))];
+  const ids = [...new Set([c.assigned_staff_id, ...(sc.data || []).map(x => x.assigned_staff_id)].filter(Boolean))];
   const total = inv.reduce((a, r) => a + Number(r.final_price || 0), 0);
   $('body').innerHTML = `<div class="head"><button class="ghost" data-go="clients">← Clients</button><button class="ghost" data-cedit="1">✏️ Edit</button></div>
     <h2 style="margin-bottom:2px">${esc(c.client_name)}</h2>
@@ -805,14 +819,18 @@ async function showClient(c) {
 }
 
 $('body').addEventListener('click', e => {
-  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit],[data-reg],[data-appr]');
+  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit],[data-reg],[data-appr],[data-join],[data-jr],[data-fadd],[data-fm]');
   if (!g) return;
   editing = false;
   if (g.dataset.reg) { showRegister(); return; }
+  if (g.dataset.join) { showJoin(); return; }
+  if (g.dataset.jr) { reviewJoin(g.dataset.jr); return; }
   if (g.dataset.appr) { reviewCompany(g.dataset.appr); return; }
   if (g.dataset.cedit) { openForm('clients', curClient); return; }
   if (g.dataset.sedit) { openForm('staff', curStaff); return; }
-  if (g.dataset.fin) { finFilter = g.dataset.fin; load(); return; }
+  if (g.dataset.fin) { finType = g.dataset.fin; finMonth = 'month'; mode = 'findetail'; load(); return; }
+  if (g.dataset.fadd) { ENT.finance.fields[0][4] = finType; openForm('finance', null); return; }
+  if (g.dataset.fm) { finMonth = g.dataset.fm; loadFinDetail(); return; }
   const v = g.dataset.go;
   if (v.startsWith('act:')) { actFilter = v.slice(4); mode = 'activity'; } else mode = v;
   load();
@@ -972,6 +990,7 @@ async function loadCompany() {
   const r = await sb.from('companies').select('*').eq('id', companyId).single();
   if (r.error) return fail(r.error);
   openForm('company', r.data);
+  if (r.data.join_code) $('body').insertAdjacentHTML('afterbegin', `<div class="row s-Ontheway" style="display:block">🔑 Staff join code: <strong style="font-size:1.3rem">${esc(r.data.join_code)}</strong><br><span class="mute">Share this with your cleaners so they can ask to join.</span></div>`);
 }
 
 // ---- Agency sign-up and approvals ----
@@ -980,13 +999,16 @@ function showRegister() {
   $('body').innerHTML = `<p class="mute">Tell us about your cleaning agency. We will review it and activate your account.</p>
     <form id="rf" onsubmit="return false"><label>Agency name *<input name="cname" required></label>
       <label>Slogan<input name="slogan"></label><label>Logo<input name="logo" type="file" accept="image/*"></label>
+      ${termsHtml()}
+      <label style="display:flex;gap:10px;align-items:flex-start;color:var(--text)"><input type="checkbox" name="agree" style="width:24px;height:24px;flex:none"><span>I have read and agree to the Terms &amp; Conditions and Privacy Policy.</span></label>
       <button class="big b-green">Submit for approval</button></form><p class="msg" id="fmsg"></p>`;
 }
 $('body').addEventListener('submit', async e => {
   const f = e.target.closest('#rf');
   if (!f) return;
   e.preventDefault();
-  const r = await sb.rpc('register_company', { p_name: f.elements.cname.value, p_slogan: f.elements.slogan.value });
+  if (!f.elements.agree.checked) { $('fmsg').textContent = 'Please tick the box to agree to the Terms and Privacy Policy. Your agency is only created after you agree.'; return; }
+  const r = await sb.rpc('register_company', { p_name: f.elements.cname.value, p_slogan: f.elements.slogan.value, p_agreed: true });
   if (r.error) { $('fmsg').textContent = r.error.message; return; }
   const file = f.elements.logo.files[0];
   if (file) {
@@ -1029,6 +1051,144 @@ $('sf').addEventListener('submit', async e => {
   if (data.session) { $('spw').value = ''; showApp(); }
   else { $('lmsg').style.color = '#22c55e'; $('lmsg').textContent = 'Account created. Check your email to confirm it, then sign in.'; }
 });
+
+// ---- Direct invoice form ----
+let iv = null;
+async function loadInvoiceForm() {
+  editing = true;
+  const c = await sb.from('clients').select('id,client_name,address').eq('company_id', companyId).order('client_name');
+  pick.clients = c.data || [];
+  iv = { client: '', address: '', jtype: OPT.jtype[0], date: new Date().toLocaleDateString('en-CA'), due: '', items: [{ name: '', amount: '' }], notes: '' };
+  renderInvoiceForm();
+}
+function renderInvoiceForm() {
+  $('body').innerHTML = `<div class="head"><button class="ghost" data-go="invoices">← Invoices</button></div><h2>📨 New invoice</h2>
+    <form id="ivf" onsubmit="return false">
+      <label>Customer name *<input name="client" list="cls" value="${esc(iv.client)}" placeholder="Type or select a customer"></label>
+      <datalist id="cls">${pick.clients.map(c => `<option value="${esc(c.client_name)}">`).join('')}</datalist>
+      <label>Customer address<input name="address" value="${esc(iv.address)}"></label>
+      <label>Job type<select name="jtype">${OPT.jtype.map(j => `<option ${j === iv.jtype ? 'selected' : ''}>${esc(j)}</option>`).join('')}</select></label>
+      <label>Invoice date<input name="date" type="date" value="${esc(iv.date)}"></label>
+      <label>Due date (optional)<input name="due" type="date" value="${esc(iv.due)}"></label>
+      <h2 style="margin:6px 0 0">Items</h2>
+      ${iv.items.map((it, i) => `<div style="display:flex;gap:8px"><input data-ii="${i}" data-f="name" value="${esc(it.name)}" placeholder="Description (e.g. Carpet wash)">
+        <input data-ii="${i}" data-f="amount" type="number" step="any" inputmode="decimal" value="${esc(it.amount)}" placeholder="₦" style="width:120px">
+        <button type="button" class="ghost" data-idel="${i}">✕</button></div>`).join('')}
+      <button type="button" class="ghost" data-iadd="1">+ Add item</button>
+      <div class="row"><strong>Total</strong><strong id="ivt" style="font-size:1.4rem"></strong></div>
+      <label>Notes (optional)<input name="notes" value="${esc(iv.notes)}"></label>
+      <button type="button" class="big b-green" id="ivgo">Create invoice</button></form><p class="msg" id="fmsg"></p>`;
+  updIv();
+}
+const updIv = () => { $('ivt').textContent = ngn(iv.items.reduce((a, x) => a + (Number(x.amount) || 0), 0)); };
+$('body').addEventListener('input', e => {
+  if (!iv || !e.target.closest('#ivf')) return;
+  const el = e.target;
+  if (el.dataset.ii !== undefined) { iv.items[+el.dataset.ii][el.dataset.f] = el.value; updIv(); }
+  else if (el.name) iv[el.name] = el.value;
+});
+$('body').addEventListener('click', e => {
+  const t = e.target.closest('[data-idel],[data-iadd],#ivgo');
+  if (!t || !iv) return;
+  if (t.dataset.idel) { iv.items.splice(+t.dataset.idel, 1); if (!iv.items.length) iv.items.push({ name: '', amount: '' }); renderInvoiceForm(); }
+  else if (t.dataset.iadd) { iv.items.push({ name: '', amount: '' }); renderInvoiceForm(); }
+  else createInvoice(t);
+});
+async function createInvoice(btn) {
+  const name = iv.client.trim();
+  const items = iv.items.filter(x => x.name.trim() || Number(x.amount)).map(x => ({ name: x.name.trim() || iv.jtype, qty: 1, amount: Number(x.amount) || 0 }));
+  const total = Math.round(items.reduce((a, x) => a + x.amount, 0) * 100) / 100;
+  if (!name) { $('fmsg').textContent = 'Please enter the customer name.'; return; }
+  if (total <= 0) { $('fmsg').textContent = 'Please add at least one item with an amount.'; return; }
+  btn.disabled = true;
+  let cl = pick.clients.find(c => c.client_name.toLowerCase() === name.toLowerCase());
+  if (!cl) {
+    const r = await sb.from('clients').insert({ company_id: companyId, client_name: name, address: iv.address.trim() || null }).select('id,client_name,address').single();
+    if (r.error) return qErr(r.error, btn);
+    cl = r.data;
+  }
+  const q = await sb.from('pricing_quotations').insert({ company_id: companyId, client_id: cl.id, cleaning_type: iv.jtype,
+    ...Object.fromEntries(COSTS.map(k => [k, 0])), profit_margin: 0, final_price: total, created_at: new Date((iv.date || new Date().toLocaleDateString('en-CA')) + 'T12:00:00').toISOString() })
+    .select('id,created_at').single();
+  if (q.error) return qErr(q.error, btn);
+  const d = await sb.from('quotation_details').insert({ company_id: companyId, pricing_quotation_id: q.data.id, client_id: cl.id, line_items: items,
+    is_saved_as_invoice: true, invoice_status: 'Unpaid', due_date: iv.due || null, notes: iv.notes.trim() || null }).select('id').single();
+  if (d.error) return qErr(d.error, btn);
+  confetti(); toast('Invoice created ✨');
+  showQuote({ id: q.data.id, detailId: d.data.id, clientId: cl.id, client: cl.client_name, type: iv.jtype, total, date: q.data.created_at, items,
+    address: cl.address || iv.address, invoice: true, istatus: 'Unpaid', due: iv.due, notes: iv.notes });
+}
+
+// ---- Payments and Expenses pages ----
+async function loadFinDetail() {
+  const r = await sb.from('financials').select('*').eq('company_id', companyId).eq('transaction_type', finType).order('transaction_date', { ascending: false });
+  if (r.error) return fail(r.error);
+  const m = monthInfo();
+  const rows = finMonth === 'all' ? (r.data || []) : (r.data || []).filter(x => (x.transaction_date || '') >= m.startStr && (x.transaction_date || '') <= m.endStr);
+  rowsCache = rows;
+  const total = rows.reduce((a, x) => a + Number(x.amount || 0), 0);
+  const tab = (k, l) => `<button data-fm="${k}" style="text-align:center;${finMonth === k ? 'background:#2563eb;color:#fff' : ''}">${l}</button>`;
+  $('body').innerHTML = `<div class="head"><button class="ghost" data-go="finance">← Finances</button><button class="ghost" data-fadd="1">+ Add</button></div>
+    <h2>${finType === 'Payment' ? '💰 Payments (revenue)' : '🧾 Expenses'}</h2>
+    <div class="stat ${finType === 'Payment' ? 'green' : 'red'}"><div><b>${ngn(total)}</b><span>${finMonth === 'all' ? 'All time' : esc(m.label)} · ${rows.length} entr${rows.length === 1 ? 'y' : 'ies'}</span></div></div>
+    <div class="nav" style="display:flex;margin:12px 0">${tab('month', 'This month')}${tab('all', 'All time')}</div>
+    ${rows.map((x, i) => `<div class="row tap" data-edit="${i}"><div><strong>${esc(x.description || x.transaction_type)}</strong><br><span class="mute">${esc(x.transaction_date || '')} · ${esc(x.payment_method || '')}</span></div><strong>${ngn(x.amount)}</strong></div>`).join('') || '<p class="mute">Nothing here yet.</p>'}`;
+}
+
+// ---- Terms, privacy and staff join code ----
+function termsHtml() {
+  const c = esc(CFG.contact || 'the platform owner');
+  return `<details><summary>📄 Terms &amp; Conditions</summary>
+    <p><strong>The service.</strong> Cleaning Operations Mgt helps cleaning agencies manage staff, clients, schedules, invoices and payroll.</p>
+    <p><strong>Your account.</strong> You are responsible for your login and for the people you add. Give accurate information. New agencies are reviewed before they are activated, and accounts may be suspended for misuse.</p>
+    <p><strong>Your data.</strong> Your agency’s data belongs to you and is kept separate from other agencies. The platform owner may access it only to give support or keep the service safe.</p>
+    <p><strong>Staff and clients.</strong> You confirm you may enter your staff’s and clients’ details, and you will tell your staff that their location is recorded when they check in.</p>
+    <p><strong>Invoices and payroll.</strong> These are record-keeping tools. You are responsible for their accuracy. This is not accounting or tax advice.</p>
+    <p><strong>Changes and availability.</strong> The service is provided as it is. Features may change, and paid plans may be introduced with notice.</p>
+    <p><strong>Ending.</strong> You can ask for a copy of your data or for it to be deleted. Contact: ${c}.</p></details>
+    <details><summary>🔒 Privacy Policy</summary>
+    <p><strong>What we collect.</strong> Account email, agency details, staff names, phone numbers and photos, client names and addresses, schedules, hours, invoices, payments, and a staff member’s location at check-in.</p>
+    <p><strong>Why.</strong> Only to run the features you use.</p>
+    <p><strong>Who can see it.</strong> People in your agency, according to their role, and the platform owner for support. We do not sell your data.</p>
+    <p><strong>Location.</strong> Recorded only when staff check in, and only after their phone asks permission.</p>
+    <p><strong>Storage.</strong> Data is stored in a secure cloud database. Sign-in is required, and each agency’s data is separated.</p>
+    <p><strong>Your choices.</strong> You may ask to see, correct or delete your data. We aim to follow applicable data protection law, including the Nigeria Data Protection Act. Contact: ${c}.</p></details>`;
+}
+function showJoin() {
+  editing = true; $('title').textContent = 'Join your agency';
+  $('body').innerHTML = `<p class="mute">Ask your manager for the agency code, then enter it with your full name.</p>
+    <form id="jf" onsubmit="return false"><label>Agency code<input name="code" required autocapitalize="characters"></label>
+      <label>Your full name<input name="fname" required></label><button class="big b-green">Send request</button></form><p class="msg" id="fmsg"></p>`;
+}
+$('body').addEventListener('submit', async e => {
+  const f = e.target.closest('#jf');
+  if (!f) return;
+  e.preventDefault();
+  const r = await sb.rpc('join_company', { p_code: f.elements.code.value, p_name: f.elements.fname.value });
+  if (r.error) { $('fmsg').textContent = r.error.message; return; }
+  editing = false; showApp();
+});
+async function loadJoins() {
+  const [rq, st] = await Promise.all([
+    sb.from('join_requests').select('*').eq('company_id', companyId).eq('status', 'pending').order('created_at'),
+    sb.from('staff').select('id,full_name,user_id').eq('company_id', companyId).order('full_name')
+  ]);
+  const bad = [rq, st].find(r => r.error);
+  if (bad) return fail(bad.error);
+  const free = (st.data || []).filter(x => !x.user_id);
+  $('body').innerHTML = `<h2>🙋 Staff join requests</h2><p class="mute" style="margin-top:0">Your join code is on the 🏢 Company page. Approve only people you know.</p>`
+    + ((rq.data || []).map(r => `<div class="row" style="display:block"><strong>${esc(r.full_name)}</strong><br><span class="mute">${esc(new Date(r.created_at).toLocaleDateString('en-GB'))}</span>
+      <label style="margin-top:8px">Link to an existing staff record<select id="jl${r.id}"><option value="">New staff record</option>${free.map(x => `<option value="${x.id}">${esc(x.full_name)}</option>`).join('')}</select></label>
+      <div style="display:flex;gap:8px;margin-top:10px"><button class="ghost" data-jr="${r.id},1" style="background:#16a34a;color:#fff;border:0">✅ Approve</button><button class="ghost" data-jr="${r.id},0">✖ Reject</button></div></div>`).join('')
+      || '<p class="mute">No requests right now. 🎉</p>');
+}
+async function reviewJoin(v) {
+  const [id, ok] = v.split(',');
+  const sel = $('jl' + id);
+  const r = await sb.rpc('review_join', { p_id: Number(id), p_approve: ok === '1', p_staff_id: sel && sel.value ? Number(sel.value) : null });
+  if (r.error) return fail(r.error);
+  toast(ok === '1' ? 'Staff approved ✅' : 'Request rejected'); loadJoins();
+}
 
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });
 $('nav').addEventListener('click', e => {

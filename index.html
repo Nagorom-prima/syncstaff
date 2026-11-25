@@ -83,6 +83,7 @@ h1{background:linear-gradient(90deg,#16a34a,#2563eb);-webkit-background-clip:tex
 a{color:#38bdf8}
 .qt.c3{grid-template-columns:1fr 34px 100px}
 details{margin:8px 0}summary{cursor:pointer;font-weight:700}details p{margin:6px 0}
+.med{width:auto;padding:14px 34px;font-size:1.05rem;border-radius:16px;margin:12px 0}
 </style>
 </head>
 <body>
@@ -176,7 +177,9 @@ async function showApp() {
   if (!isOwner && companies.every(c => c.status && c.status !== 'active')) {
     $('menu').hidden = true;
     $('title').textContent = companies[0].company_name;
-    $('body').innerHTML = companies[0].status === 'rejected'
+ $('body').innerHTML = companies[0].status === 'inactive'
+      ? '<p class="mute">This agency is currently inactive. Please contact the platform owner.</p>'
+      : companies[0].status === 'rejected'
       ? '<p class="mute">Your registration was not approved. Please contact the platform owner.</p>'
       : '<div class="row s-Working">⏳ Your agency is waiting for approval. Reload this page once you have been approved.</div>';
     return;
@@ -195,7 +198,7 @@ function ctx() {
   $('menu').hidden = role === 'staff';
   if (role === 'staff') $('nav').hidden = true;
   const seeMoney = isOwner || role === 'owner' || role === 'admin';
-  $('nav').innerHTML = MENU.filter(([k]) => (seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company', 'joins'].includes(k)) && (k !== 'approvals' || isOwner))
+  $('nav').innerHTML = MENU.filter(([k]) => (seeMoney || !['pricing', 'quotes', 'invoices', 'payroll', 'finance', 'company', 'joins'].includes(k)) && (!['approvals', 'agencies'].includes(k) || isOwner))
     .map(([k, l]) => `<button class="${mode === k ? 'on' : ''}" data-nav="${k}">${l}</button>`).join('');
 }
 
@@ -217,7 +220,7 @@ async function load() {
   }
   if (mode !== 'pricing') qs = null;
   return mode === 'shift' ? loadShift() : mode === 'dash' ? loadDash() : mode === 'timesheets' ? loadTimesheets()
-    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : mode === 'approvals' ? loadApprovals() : mode === 'joins' ? loadJoins() : mode === 'findetail' ? loadFinDetail() : loadList(mode);
+    : mode === 'pricing' ? loadPricing() : mode === 'quotes' ? loadQuotes() : mode === 'activity' ? loadActivity() : mode === 'home' ? loadHome() : mode === 'invoices' ? loadQuotes(true) : mode === 'payroll' ? loadPayroll() : mode === 'company' ? loadCompany() : mode === 'approvals' ? loadApprovals() : mode === 'joins' ? loadJoins() : mode === 'agencies' ? loadAgencies() : mode === 'findetail' ? loadFinDetail() : loadList(mode);
 }
 
 async function loadDash() {
@@ -312,13 +315,16 @@ async function loadShift() {
   const banner = paidNow ? '<div class="row s-Done">🎉 Month completed! Your payment has been made.</div>'
     : me.days_to_pay ? `<div class="row s-Ontheway">📅 ${mdays} / ${me.days_to_pay} work days this month</div>` : '';
   let btn;
-  if (!openLog) btn = '<button class="big b-blue" data-act="travel">🚗 I’m on the way</button><button class="big ghost" data-act="direct">🧽 Start work now</button>';
+  if (!openLog) btn = `<button class="med b-green" id="cibtn" type="button">✅ Check in</button>
+    <div id="cipanel" class="row" hidden style="display:block;margin-top:4px"><p class="mute" style="margin:0 0 10px">Tell us about this job</p>${projSel}
+      <div style="display:flex;gap:8px;margin-top:14px"><button class="big b-blue" data-act="travel" style="margin:0">🚗 On the way</button>
+      <button class="big b-amber" data-act="direct" style="margin:0">🧽 Start working</button></div></div>`;
   else if (openLog.current_status === 'On the way') btn = '<button class="big b-amber" data-act="start">🧽 Start working</button>';
   else btn = '<button class="big b-green" data-act="finish">✅ Mark done</button>';
   $('body').innerHTML = `
     ${banner}<div style="display:flex;align-items:center;gap:12px;margin-top:18px">${av(me.full_name, me.photo_url, 56)}<div><h2 style="margin:0">${greet()}, ${esc((me.full_name || '').split(' ')[0])}! ${sun()}</h2><label class="chip" style="cursor:pointer;margin:6px 0 0">📷 Change photo<input id="myphoto" type="file" accept="image/*" hidden></label></div></div>
     ${openLog ? `<div class="row s-${esc(openLog.current_status.replace(/\s/g, ''))}"><strong>${esc(openLog.current_status)}</strong><span class="mute">since ${esc(fmt(openLog.clock_in_time))}</span></div>` : ''}
-    ${projSel}${btn}
+    ${btn}
     <button class="big ghost" style="width:100%" data-add="urgent">Report an urgent issue</button>
     <h2>My upcoming jobs</h2>
     ${(sc.data || []).length ? sc.data.map(s => `
@@ -365,7 +371,7 @@ const OPT = {
   jtype: ['Home cleaning', 'Post-construction', 'Carpet/rug wash', 'Upholstery cleaning', 'Compound/floor washing']
 };
 const MENU = [['dash', '📊 Dashboard'], ['home', '🏠 Home Cleaning'], ['projects', '🏗️ Post-Construction'], ['schedules', '📅 Schedule'], ['clients', '👥 Clients'],
-  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['joins', '🙋 Join requests'], ['company', '🏢 Company'], ['approvals', '🛂 Approvals']];
+  ['staff', '🧑‍🔧 Staff'], ['urgent', '🚨 Urgent issues'], ['timesheets', '⏱️ Timesheets'], ['pricing', '💰 Pricing'], ['quotes', '🧾 Quotations'], ['invoices', '📨 Invoices'], ['payroll', '💸 Payroll'], ['finance', '💳 Finances'], ['joins', '🙋 Join requests'], ['company', '🏢 Company'], ['approvals', '🛂 Approvals'], ['agencies', '🏢 Agencies']];
 const COSTS = ['transport_fare', 'staff_feeding', 'materials_cost', 'ladder_cost', 'overhead_cost', 'staff_payment'];
 const fm = n => (Number(n) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 });
 const ENT = {
@@ -819,11 +825,13 @@ async function showClient(c) {
 }
 
 $('body').addEventListener('click', e => {
-  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit],[data-reg],[data-appr],[data-join],[data-jr],[data-fadd],[data-fm]');
+  const g = e.target.closest('[data-go],[data-fin],[data-cedit],[data-sedit],[data-reg],[data-appr],[data-join],[data-jr],[data-fadd],[data-fm],[data-ag],[data-agdel]');
   if (!g) return;
   editing = false;
   if (g.dataset.reg) { showRegister(); return; }
   if (g.dataset.join) { showJoin(); return; }
+  if (g.dataset.ag) { setAgency(g.dataset.ag); return; }
+  if (g.dataset.agdel) { deleteAgency(Number(g.dataset.agdel)); return; }
   if (g.dataset.jr) { reviewJoin(g.dataset.jr); return; }
   if (g.dataset.appr) { reviewCompany(g.dataset.appr); return; }
   if (g.dataset.cedit) { openForm('clients', curClient); return; }
@@ -1046,7 +1054,7 @@ $('sf').addEventListener('submit', async e => {
   $('lmsg').textContent = ''; $('lmsg').style.color = '';
   const pw = $('spw').value;
   if (pw.length < 8) { $('lmsg').textContent = 'Password must be at least 8 characters.'; return; }
-  const { data, error } = await sb.auth.signUp({ email: $('sem').value.trim(), password: pw });
+  const { data, error } = await sb.auth.signUp({ email: $('sem').value.trim(), password: pw, options: { emailRedirectTo: location.origin + location.pathname } });
   if (error) { $('lmsg').textContent = error.message; return; }
   if (data.session) { $('spw').value = ''; showApp(); }
   else { $('lmsg').style.color = '#22c55e'; $('lmsg').textContent = 'Account created. Check your email to confirm it, then sign in.'; }
@@ -1188,6 +1196,40 @@ async function reviewJoin(v) {
   const r = await sb.rpc('review_join', { p_id: Number(id), p_approve: ok === '1', p_staff_id: sel && sel.value ? Number(sel.value) : null });
   if (r.error) return fail(r.error);
   toast(ok === '1' ? 'Staff approved ✅' : 'Request rejected'); loadJoins();
+}
+
+$('body').addEventListener('click', e => { if (e.target.closest('#cibtn')) $('cipanel').hidden = !$('cipanel').hidden; });
+// ---- Agencies: deactivate, activate, delete (platform owner) ----
+let agList = [];
+async function loadAgencies() {
+  const r = await sb.from('companies').select('id,company_name,logo_url,status,created_at').order('created_at', { ascending: false });
+  if (r.error) return fail(r.error);
+  agList = r.data || [];
+  const chip = { active: '🟢 Active', pending: '⏳ Pending', rejected: '✖ Rejected', inactive: '⏸ Inactive' };
+  $('body').innerHTML = `<h2>🏢 Agencies</h2><p class="mute" style="margin-top:0">Deactivating blocks an agency without deleting its data. Deleting is permanent.</p>`
+    + agList.map(c => `<div class="row" style="display:block"><div style="display:flex;align-items:center;gap:12px">${av(c.company_name, c.logo_url)}
+      <div style="flex:1"><strong>${esc(c.company_name)}</strong><br><span class="mute">${chip[c.status] || esc(c.status)}</span></div></div>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="ghost" data-ag="${c.id},${c.status === 'active' ? 'inactive' : 'active'}">${c.status === 'active' ? '⏸ Deactivate' : '▶ Activate'}</button>
+        <button class="ghost" data-agdel="${c.id}" style="color:#ef4444">🗑 Delete</button></div></div>`).join('');
+}
+async function setAgency(v) {
+  const [id, st] = v.split(',');
+  const r = await sb.rpc('review_company', { p_id: Number(id), p_status: st });
+  if (r.error) return fail(r.error);
+  companies = companies.map(c => c.id === Number(id) ? { ...c, status: st } : c);
+  toast(st === 'active' ? 'Agency activated ✅' : 'Agency deactivated ⏸'); loadAgencies();
+}
+async function deleteAgency(id) {
+  const c = agList.find(x => x.id === id);
+  if (!c) return;
+  const typed = prompt(`This permanently deletes ${c.company_name} and ALL its data (staff, clients, invoices, payroll).\n\nType the agency name to confirm:`);
+  if (!typed || typed.trim() !== c.company_name.trim()) { toast('Cancelled. Nothing was deleted.'); return; }
+  const r = await sb.rpc('delete_company', { p_id: id });
+  if (r.error) return fail(r.error);
+  companies = companies.filter(x => x.id !== id);
+  if (companyId === id && companies.length) companyId = companies[0].id;
+  toast('Agency deleted 🗑'); loadAgencies();
 }
 
 $('menu').addEventListener('click', () => { $('nav').hidden = !$('nav').hidden; });

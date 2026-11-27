@@ -96,6 +96,19 @@ details{margin:8px 0}summary{cursor:pointer;font-weight:700}details p{margin:6px
     <input id="pw" type="password" placeholder="Password" autocomplete="current-password" required>
     <button>Sign in</button>
   </form>
+  <p class="mute" id="fgrow"><a href="#" id="forgot">Forgot password?</a></p>
+  <form id="ff" hidden>
+    <p class="mute">Enter your email and we will send you a link to reset your password.</p>
+    <input id="fem" type="email" placeholder="Your email" autocomplete="username" required>
+    <button>Send reset link</button>
+    <p class="mute"><a href="#" id="ffback">Back to sign in</a></p>
+  </form>
+  <form id="nf" hidden>
+    <p class="mute">Choose a new password.</p>
+    <input id="np1" type="password" placeholder="New password (8+ characters)" autocomplete="new-password" required>
+    <input id="np2" type="password" placeholder="Repeat new password" autocomplete="new-password" required>
+    <button>Save new password</button>
+  </form>
   <form id="sf" hidden>
     <input id="sem" type="email" placeholder="Your email" autocomplete="username" required>
     <input id="spw" type="password" placeholder="Choose a password (8+ characters)" autocomplete="new-password" required>
@@ -130,6 +143,7 @@ if (!CFG.url || !CFG.anon) {
   document.body.innerHTML = '<main><h1>Cleaning Operations Mgt</h1><p class="msg">config.js is missing or incomplete.</p></main>';
   throw new Error('config.js missing');
 }
+const RECOVERY = /type=recovery/.test(location.hash);
 const sb = supabase.createClient(CFG.url, CFG.anon);
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -1043,10 +1057,47 @@ async function reviewCompany(v) {
   toast(st === 'active' ? 'Agency approved ✅' : 'Agency rejected'); loadApprovals();
 }
 
+// ---- Forgot password ----
+function showNewPassword() {
+  $('app').hidden = true; $('login').hidden = false;
+  ['lf', 'sf', 'ff', 'fgrow', 'tosignup'].forEach(id => { $(id).hidden = true; });
+  $('tosignup').parentElement.hidden = true;
+  $('nf').hidden = false;
+}
+$('forgot').addEventListener('click', e => {
+  e.preventDefault();
+  $('lf').hidden = true; $('fgrow').hidden = true; $('ff').hidden = false; $('lmsg').textContent = '';
+});
+$('ffback').addEventListener('click', e => {
+  e.preventDefault();
+  $('ff').hidden = true; $('lf').hidden = false; $('fgrow').hidden = false; $('lmsg').textContent = '';
+});
+$('ff').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('lmsg').style.color = '';
+  const { error } = await sb.auth.resetPasswordForEmail($('fem').value.trim(), { redirectTo: location.origin + location.pathname });
+  if (error) { $('lmsg').textContent = error.message; return; }
+  $('lmsg').style.color = '#22c55e';
+  $('lmsg').textContent = 'If that email has an account, we sent a reset link. Check your inbox and your spam folder.';
+});
+$('nf').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('lmsg').style.color = '';
+  const a = $('np1').value;
+  if (a.length < 8) { $('lmsg').textContent = 'Password must be at least 8 characters.'; return; }
+  if (a !== $('np2').value) { $('lmsg').textContent = 'The two passwords do not match.'; return; }
+  const { error } = await sb.auth.updateUser({ password: a });
+  if (error) { $('lmsg').textContent = error.message; return; }
+  history.replaceState(null, '', location.pathname);
+  $('np1').value = ''; $('np2').value = '';
+  toast('Password updated ✅'); showApp();
+});
+sb.auth.onAuthStateChange(ev => { if (ev === 'PASSWORD_RECOVERY') showNewPassword(); });
+
 $('tosignup').addEventListener('click', e => {
   e.preventDefault();
   const show = $('sf').hidden;
-  $('sf').hidden = !show; $('lf').hidden = show; $('lmsg').textContent = '';
+  $('sf').hidden = !show; $('lf').hidden = show; $('fgrow').hidden = show; $('lmsg').textContent = '';
   $('tosignup').textContent = show ? 'Back to sign in' : 'Create an account';
 });
 $('sf').addEventListener('submit', async e => {
@@ -1253,7 +1304,7 @@ $('out').addEventListener('click', async () => { await sb.auth.signOut(); showLo
 
 (async () => {
   const { data } = await sb.auth.getSession();
-  data.session ? showApp() : showLogin();
+  if (RECOVERY) showNewPassword(); else if (data.session) showApp(); else showLogin();
 })();
 </script>
 </body>
